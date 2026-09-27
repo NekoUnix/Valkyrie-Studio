@@ -1,4 +1,4 @@
-# v0.3.0-alpha.1 release status
+# v0.3.0-alpha.2 release status
 
 [Home](../README.md) · [User guide](USER_GUIDE.md) · [Validation](../VALIDATION.md)
 
