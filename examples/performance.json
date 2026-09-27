@@ -1,0 +1,8 @@
+{
+  "duration": 6,
+  "events": [
+    {"time": 0, "command": {"op": "emotion", "name": "joy", "duration": 2}},
+    {"time": 2, "command": {"op": "emotion", "name": "thinking", "duration": 2}},
+    {"time": 4, "command": {"op": "emotion", "name": "surprised", "duration": 2}}
+  ]
+}

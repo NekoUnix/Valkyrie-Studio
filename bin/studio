@@ -1,0 +1,37 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+require 'bundler/setup'
+require 'dotenv'
+require 'optparse'
+$stdout.sync = true
+require_relative '../lib/live2d_studio'
+Dotenv.load(File.join(Live2D::ROOT, '.env'))
+options = {}
+OptionParser.new do |p|
+  p.banner = 'Usage: bundle exec ruby bin/studio [options]'
+  p.on('--model PATH') { |v| options[:model] = v }
+  p.on('--width N', Integer) { |v| options[:width] = v }
+  p.on('--height N', Integer) { |v| options[:height] = v }
+  p.on('--fps N', Integer) { |v| options[:fps] = Live2D.number(v, min: 1, max: 120).to_i }
+  p.on('--frames N', Integer) { |v| options[:frames] = Live2D.number(v, min: 1, max: 5_184_000).to_i }
+  p.on('--timeline PATH') { |v| options[:timeline] = v }
+  p.on('--output PATH') { |v| options[:output] = v }
+  p.on('--codec NAME', Live2D::Exporter::CODECS.keys) { |v| options[:codec] = v }
+  p.on('--audio PATH') { |v| options[:audio] = v }
+  p.on('--visemes PATH') { |v| options[:visemes] = v }
+  p.on('--background PATH') { |v| options[:background] = v }
+  p.on('--snapshot PATH') { |v| options[:snapshot] = v }
+  p.on('--ui-snapshot PATH') { |v| options[:ui_snapshot] = v }
+  p.on('--report PATH') { |v| options[:report] = v }
+  p.on('--hidden', 'Hidden native window; still requires a GPU/display context') { options[:hidden] = true }
+  p.on('--diagnostic', 'Render a synthetic alpha test pattern when no model is loaded') { options[:diagnostic] = true }
+  p.on('--config PATH') { |v| options[:config] = v }
+  p.on('-h', '--help') { puts p; exit }
+end.parse!
+begin
+  require_relative '../lib/live2d_studio/app'
+  Live2D::App.new(Live2D.config(options.fetch(:config, File.join(Live2D::ROOT, 'config.yml'))), options).run
+rescue Live2D::Error, LoadError, SystemCallError => e
+  warn "Valkyrie Studio: #{e.message}"
+  exit 1
+end

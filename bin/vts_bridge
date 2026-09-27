@@ -1,0 +1,81 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+require 'bundler/setup'
+require 'websocket-client-simple'
+require_relative '../lib/live2d_studio'
+url = ARGV[0] || 'ws://127.0.0.1:8001'
+destination_port = Integer(ARGV[1] || 15483)
+$stdout.sync = true
+$stderr.sync = true
+token_path = File.join(Live2D::ROOT, 'tmp', 'vts-token')
+FileUtils.mkdir_p(File.dirname(token_path))
+udp = UDPSocket.new
+socket = WebSocket::Client::Simple.connect(url)
+authenticated = false
+requested_token = false
+send_request = lambda do |type, data = {}|
+  socket.send(JSON.generate(apiName: 'VTubeStudioPublicAPI', apiVersion: '1.0',
+    requestID: SecureRandom.hex(8), messageType: type, data: data))
+end
+authenticate = lambda do |token|
+  send_request.call('AuthenticationRequest', pluginName: 'Valkyrie Studio', pluginDeveloper: 'Valkyrie Studio', authenticationToken: token)
+end
+socket.on :open do
+  if File.file?(token_path)
+    authenticate.call(File.read(token_path).strip)
+  else
+    requested_token = true
+    send_request.call('AuthenticationTokenRequest', pluginName: 'Valkyrie Studio', pluginDeveloper: 'Valkyrie Studio')
+    puts 'Approve Valkyrie Studio in VTube Studio.'
+  end
+end
+socket.on :message do |message|
+  packet = JSON.parse(message.data)
+  data = packet.fetch('data', {})
+  case packet['messageType']
+  when 'AuthenticationTokenResponse'
+    token = data.fetch('authenticationToken')
+    File.write(token_path, token, mode: 'w', perm: 0o600)
+    authenticate.call(token)
+  when 'AuthenticationResponse'
+    authenticated = data['authenticated'] == true
+    unless authenticated
+      if requested_token
+        warn 'VTube Studio authentication was rejected. Check its plugin approval prompt.'
+      else
+        requested_token = true
+        send_request.call('AuthenticationTokenRequest', pluginName: 'Valkyrie Studio', pluginDeveloper: 'Valkyrie Studio')
+        puts 'Approve Valkyrie Studio in VTube Studio.'
+      end
+    end
+  when 'InputParameterListResponse'
+    values = (data.fetch('defaultParameters', []) + data.fetch('customParameters', [])).to_h { |v| [v['name'], v['value']] }
+    normalized = {}
+    { 'FaceAngleX' => 'yaw', 'FaceAngleY' => 'pitch', 'FaceAngleZ' => 'roll', 'MouthOpen' => 'jawOpen',
+      'MouthSmile' => 'mouthSmileLeft', 'BrowLeftY' => 'browOuterUpLeft', 'BrowRightY' => 'browOuterUpRight' }.each do |source, target|
+      normalized[target] = values[source] if values.key?(source)
+    end
+    normalized['mouthSmileRight'] = normalized['mouthSmileLeft'] if normalized.key?('mouthSmileLeft')
+    %w[Left Right].each { |side| normalized["eyeBlink#{side}"] = 1 - values["EyeOpen#{side}"].clamp(0, 1) if values.key?("EyeOpen#{side}") }
+    Live2D::Tracking::KEYS.each { |id| normalized[id] = values[id] if values.key?(id) }
+    normalized.transform_values! { |v| Float(v) }
+    normalized.each { |id, v| normalized[id] = v.clamp(0, 1) unless Live2D::Tracking::ANGLES.include?(id) }
+    udp.send(JSON.generate(blendshapes: normalized), 0, '127.0.0.1', destination_port)
+  when 'APIError'
+    warn "VTS API error: #{data['message']}"
+  end
+rescue StandardError => e
+  warn "VTS packet error: #{e.message}"
+end
+socket.on(:error) { |e| warn e.to_s }
+socket.on(:close) { authenticated = false; warn 'VTS connection closed; restart the bridge to reconnect.' }
+begin
+  loop do
+    send_request.call('InputParameterListRequest') if authenticated
+    sleep(1.0 / 30)
+  end
+rescue Interrupt
+  socket.close
+ensure
+  udp.close
+end

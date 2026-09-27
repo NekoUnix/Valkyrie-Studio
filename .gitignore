@@ -1,0 +1,23 @@
+.bundle/
+.venv/
+vendor/
+.tools/
+build*/
+dist/
+.env
+.credentials/
+output/
+tmp/
+*.log
+__pycache__/
+user-settings.json
+# Model packages are always local inputs, never repository assets.
+models/
+assets/models/
+*.moc3
+*.model3.json
+*.physics3.json
+*.motion3.json
+*.exp3.json
+*.cdi3.json
+*.userdata3.json

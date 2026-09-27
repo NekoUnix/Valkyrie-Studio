@@ -1,0 +1,36 @@
+{
+  "provider": "elevenlabs",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "background": [0.04, 0.05, 0.08, 1.0],
+  "view": { "zoom": 3.3, "x": 0.0, "y": -1.6 },
+  "chapter_seconds": 180,
+  "lines": [
+    {
+      "text": "Hello, I'm Vaelari. Welcome to Valkyrie Studio.",
+      "emotion": "joy",
+      "pause": 0.18,
+      "motion": [
+        { "at": 0.0, "yaw": -8, "pitch": 0, "roll": -2 },
+        { "at": 0.5, "yaw": 9, "pitch": 4, "roll": 2 },
+        { "at": 1.0, "yaw": 0, "pitch": 0, "roll": 0 }
+      ]
+    },
+    {
+      "text": "An AI agent can write my lines and direct my head movements while the studio keeps my lips matched to the voice.",
+      "emotion": "thinking",
+      "pause": 0.18
+    },
+    {
+      "text": "For longer videos, it renders the script in synchronized chapters and joins them into one MP4.",
+      "emotion": "joy",
+      "pause": 0.12,
+      "motion": [
+        { "at": 0.0, "yaw": 0 },
+        { "at": 0.4, "yaw": -10, "pitch": 3 },
+        { "at": 1.0, "yaw": 0 }
+      ]
+    }
+  ]
+}
