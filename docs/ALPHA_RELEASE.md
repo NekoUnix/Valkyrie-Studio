@@ -1,32 +1,15 @@
-# Alpha release status
+# v0.3.0-alpha.1 release status
 
 [Home](../README.md) · [User guide](USER_GUIDE.md) · [Validation](../VALIDATION.md)
 
-Valkyrie Studio v0.2.0-alpha.1 is a **public source-only alpha**. This repository contains MIT-licensed Ruby/C++ application source, documentation, examples, tests, and the redacted 81-second [Vaelari walkthrough](../media/Valkyrie-Studio-Walkthrough-Public.mp4). Its active renderer uses MIT-licensed Purism Core. It does not contain any model, provider keys, downloaded tools, or an installer. The walkthrough predates the Purism migration.
+This release replaces the app and control engine with Rust and retains MIT-licensed Purism Core as the separate C model runtime. The GitHub workflow builds six portable archives from the release tag: Windows x64, macOS Apple Silicon, macOS Intel, Ubuntu x64, Fedora x64, and Arch x64. Each archive contains `valkyrie-studio`, `valkyrie-agent`, and `valkyrie-perform`, plus docs, examples, the cleared video walkthrough, and MIT notices. It contains no model, API key, or FFmpeg executable. The archives are not signed installers.
 
-## Platform availability
+| Platform | Verified for this alpha |
+|---|---|
+| Windows x64 | CI compile/tests; local GPU model loading, voice, fullscreen portrait recording, and two-chapter WebM checked on the development PC |
+| macOS Apple Silicon / Intel | CI compile/tests and packaging; GUI, audio, capture, and install/startup not yet checked on physical Macs |
+| Ubuntu, Fedora, Arch x64 | CI compile/tests and packaging; GUI, audio, capture, and install/startup not yet checked on physical Linux desktops |
 
-| Platform | What is prepared | What remains before a downloadable app |
-|---|---|---|
-| Windows x64 | Purism source build and native bridge tested with local models | Portable dependency packaging and clean-machine test |
-| Linux x86_64 | Build instructions and CMake source | Build and run on Linux; test GL, FFmpeg, and dependencies |
-| macOS Intel | Build instructions and architecture-specific CMake source | Build and run on Intel Mac; package and sign if applicable |
-| macOS Apple Silicon | Build instructions and architecture-specific CMake source | Build and run on Apple Silicon; package and sign if applicable |
+The Rust UI covers model loading, view control, UI scaling, social safe-area guides, agent/UDP tracking, typed OpenAI/ElevenLabs speech, voice selection, and video recording. Phone UDP bind/port fields are editable. The webcam adapter starts separately. Attachment/background editing and direct VTube Studio WebSocket connection from the old Ruby UI are not ported. Physics is independently implemented and may differ from the original model author's intended movement. [Validation](../VALIDATION.md) lists measured performance and gaps.
 
-The repository source archive can be downloaded on any of these platforms, but it is **not** a prebuilt app for each platform. Do not label source archives as native installers. Read the [new release notes](RELEASE_NOTES_0.2.0-alpha.1.md) before building.
-
-## What the alpha demonstrates
-
-- Load a Live2D .model3.json and use phone, webcam, or agent tracking.
-- Choose a typed OpenAI or ElevenLabs voice; select voices from the ElevenLabs account.
-- Preview 9:16 social framing and scale the UI without changing export dimensions.
-- Record opaque MP4 or transparent WebM/MOV; render agent-written dialogue and motion as synchronized chapters.
-- Use zoom to 12× and pan ±3 in the UI; agent scripts can use zoom to 30× and pan ±12.
-
-The [walkthrough](../media/Valkyrie-Studio-Walkthrough-Public.mp4) is a scripted local agent demonstration made with the earlier renderer, with the model moving and speaking simultaneously. It is 1920×1080, 30 FPS, 81 seconds, H.264/AAC. Local network addresses have been hidden. The original footage remains local under output/ and is not intended for GitHub.
-
-## Release boundaries
-
-The active build does not use Live2D's official SDK, so the prior SDK-based publication requirement is not asserted for this build. This does **not** establish that every licensing question is resolved: any distributed model needs its own permission, Purism's MIT notice must travel with binaries, and bundled tools have separate terms. The user cleared video footage, not model-file distribution. See [Third-party components](../THIRD_PARTY.md). No platform binary should be labeled ready until packaging and target-platform checks pass.
-
-The native runtime also needs actual Linux and macOS builds and tests before platform-specific downloads can be offered honestly. The detailed current evidence and limitations are in [Validation](../VALIDATION.md).
+The [81-second Vaelari walkthrough](../media/Valkyrie-Studio-Walkthrough-Public.mp4) shows a scripted agent and ElevenLabs voice with a model moving and speaking together. It predates this Rust renderer; the current Rust proof is a shorter local two-chapter test, not a new full-length promotional video. No still or model files are published. See [licensing and model rights](../THIRD_PARTY.md).
