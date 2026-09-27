@@ -1,87 +1,28 @@
-# Build Valkyrie Studio from source
+# Build and run
 
 [Home](../README.md) · [User guide](USER_GUIDE.md) · [Validation](../VALIDATION.md)
 
-Build the native bridge on the computer where you intend to run the Studio. Windows x64 has been exercised with local models; Linux and macOS instructions are source build paths awaiting hardware validation. The build fetches a pinned [Purism Core](https://github.com/SakuraMotion/PurismCore) revision. It does **not** need the official Cubism SDK. The Purism notice is included in [licenses/PurismCore-LICENSE.txt](../licenses/PurismCore-LICENSE.txt).
+The [release page](https://github.com/NekoUnix/Valkyrie-Studio/releases) has portable archives for Windows x64, macOS Apple Silicon, macOS Intel, Ubuntu x64, Fedora x64, and Arch x64. CI compiles and tests each on its named runner or container. A CI pass is not a hands-on graphics, camera, or recording test on macOS/Linux.
 
-Install Ruby 3.2–3.4 with Bundler, CMake 3.24+, a C/C++17 compiler, FFmpeg with the encoders you need, and an OpenGL 3.3 Core GPU/driver. Keep the Ruby, toolchain, and native build on the same architecture. Network access is needed for the first CMake dependency fetch, or set `PURISM_CORE_SOURCE_DIR` to an existing local Purism checkout. A hidden render still needs a desktop GL context.
+From source, install Rust 1.98.1, a C compiler, and the desktop libraries for your OS, then run:
 
-## Windows x64
+```sh
+cargo test --locked
+cargo build --release --locked
+```
 
-For Visual Studio Build Tools 2022, install Desktop development with C++, RubyInstaller x64 with Devkit, CMake, and FFmpeg. In an x64 Native Tools prompt:
+On Windows use the MSVC toolchain and Visual Studio C++ Build Tools, or an LLVM-MinGW environment. On macOS install Xcode command-line tools. On Ubuntu use `libasound2-dev libx11-dev libxkbcommon-dev libwayland-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev libvulkan-dev pkg-config`. Fedora and Arch dependencies are listed exactly in [.github/workflows/rust-builds.yml](../.github/workflows/rust-builds.yml). The build compiles the vendored MIT Purism Core header into the Rust application; it does not fetch or link the official Cubism SDK.
 
-~~~bat
-scripts\compile.bat
-bundle exec ruby bin\studio --model "C:\Models\avatar.model3.json"
-~~~
+Launch `target/release/valkyrie-studio` or `valkyrie-studio.exe`. The agent and performance binaries are beside it. Packaging scripts `scripts/package-rust.sh LABEL` and `scripts/package-rust.ps1 -Label LABEL` produce the platform archive in `dist/`. They include all three binaries, docs, the cleared walkthrough, examples, and MIT notices, but no models, credentials, or FFmpeg binary.
 
-For LLVM-MinGW, put Clang, `mingw32-make`, and CMake on PATH. This workstation also has local copies under ignored `.tools/`:
+For video, install FFmpeg with `utvideo` plus `libx264` (MP4), `libx265` (H.265 MP4), `libvpx-vp9` (transparent WebM), or `prores_ks` (transparent MOV). Set `FFMPEG` to an absolute executable path if needed. The recorder checks encoders before starting and will not overwrite an existing output. A GPU/driver that supports WGPU on the platform is required.
 
-~~~powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compile-mingw.ps1
-bundle install
-bundle exec ruby bin/studio --model 'C:\Models\avatar.model3.json'
-~~~
+The optional webcam helper is Python, OpenCV, and MediaPipe because the Rust core currently accepts normalized tracking packets rather than owning a camera. Install `helpers/requirements.txt` in a local virtual environment, obtain a `face_landmarker.task` for your own use, and run:
 
-Use separate build directories when switching between MSVC and MinGW. The bridge, GLFW, and `PurismCore.dll` must sit together in `build/bin` on Windows. The project launcher uses local tools when present and otherwise uses PATH.
+```sh
+python helpers/webcam.py --model /path/to/face_landmarker.task --camera 0 --port 15483 --preview
+```
 
-## macOS Intel or Apple Silicon
+Use `--camera` with a numeric index or stream URL; `--backend`, `--width`, `--height`, and `--fps` are editable. Select **webcam** mode in Studio. No model file or landmarker asset is distributed. On Windows, `scripts/webcam.ps1 -Model C:\path\to\face_landmarker.task -Camera 0 -Preview` is a convenience wrapper; pass `-Python` for a virtual-environment interpreter if needed.
 
-Install Xcode command-line tools, Homebrew Ruby/CMake/FFmpeg, and Bundler. Build separately for Intel and Apple Silicon; no universal binary is currently produced.
-
-~~~sh
-xcode-select --install
-brew install ruby cmake ffmpeg
-export PATH="$(brew --prefix ruby)/bin:$PATH"
-gem install bundler
-sh scripts/compile.sh
-bundle exec ruby bin/studio --model "$HOME/Models/avatar.model3.json"
-~~~
-
-Run Studio on the main desktop thread. macOS camera permissions are handled by the OS. This path has not been executed on a Mac yet.
-
-## Linux x86_64
-
-For Ubuntu/Debian, install the desktop GL/X11 packages, Ruby, CMake, and FFmpeg. Install Ruby 3.2+ separately if your distribution version is older.
-
-~~~sh
-sudo apt-get install build-essential cmake ruby-full ruby-dev libffi-dev \
-  libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-  libwayland-dev libxkbcommon-dev wayland-protocols ffmpeg espeak-ng
-gem install bundler
-sh scripts/compile.sh
-bundle exec ruby bin/studio --model "$HOME/Models/avatar.model3.json"
-~~~
-
-For an X11-only build, pass `-DGLFW_BUILD_WAYLAND=OFF` to `scripts/compile.sh`. Linux runtime behavior remains unverified on target hardware.
-
-## Webcam helper and checks
-
-The optional webcam helper needs Python 3.11 or 3.12 and its face-landmarker asset:
-
-~~~sh
-python -m venv .venv
-# Activate .venv for your shell, then:
-pip install -r helpers/requirements.txt
-bundle exec ruby scripts/setup_webcam.rb
-~~~
-
-The Inputs tab starts the helper only when requested. To run the Ruby suite:
-
-~~~sh
-bundle exec ruby -Itest -e 'Dir.glob("test/test_*.rb").each { |file| require_relative file }'
-~~~
-
-Set `FFMPEG` and `FFPROBE` to absolute executable paths if they are not on PATH. `VALKYRIE_DISABLE_PHYSICS=1` is a local diagnostic switch for comparing a model's unmodified parameter pose with the native spring solver. See [Validation](../VALIDATION.md) for tested configurations.
-
-| Directory | Purpose |
-|---|---|
-| `bin/` | Studio, agent client, performance renderer, VTube Studio bridge |
-| `lib/live2d_studio/` | Ruby state, tracking, audio, export, app loop |
-| `native/` | Purism adapter, spring solver, OpenGL renderer, ImGui controls |
-| `helpers/` | Optional OpenCV/MediaPipe webcam helper |
-| `scripts/` | Build, launch, and validation utilities |
-| `test/` | Ruby tests |
-| `examples/` | Editable timelines and agent scripts |
-
-Model files, downloaded dependencies, local tools, build results, credentials, and routine output media remain outside Git. Do not add models to a source archive or release package.
+Per-user data defaults to `%APPDATA%\ValkyrieStudio` on Windows, `~/Library/Application Support/ValkyrieStudio` on macOS, and `$XDG_DATA_HOME/valkyrie-studio` or `~/.local/share/valkyrie-studio` on Linux. `VALKYRIE_HOME` can override it with an absolute path. The local agent token lives in its `tmp/` directory; Windows-saved provider keys live in `.credentials/` encrypted by DPAPI. Keep both private.

@@ -3500,7 +3500,7 @@ checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 
 [[package]]
 name = "valkyrie-studio"
-version = "0.3.0-alpha.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "anyhow",
  "bytemuck",

@@ -69,9 +69,7 @@ impl CubismModel {
     /// The legacy path argument is ignored; retained for source compatibility.
     pub fn load(_legacy_core_path: &Path, bytes: &[u8], texture_count: usize) -> Result<Self> {
         ensure!(
-            bytes.len() >= 64
-                && bytes.len() <= 1280 * 1024 * 1024
-                && bytes.starts_with(b"MOC3"),
+            bytes.len() >= 64 && bytes.len() <= 1280 * 1024 * 1024 && bytes.starts_with(b"MOC3"),
             "Invalid .moc3 header/size (maximum 1280 MiB)"
         );
         ensure!((1..=32).contains(&texture_count), "Expected 1–32 textures");

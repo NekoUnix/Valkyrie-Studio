@@ -1,7 +1,7 @@
 //! Cubism ArtMeshes rendered once to a transparent GPU texture shared by both windows.
-use anyhow::{Context, Result, ensure};
 use crate::asset_limits as limits;
 use crate::purism::{Blend, Canvas, Drawable};
+use anyhow::{Context, Result, ensure};
 use bytemuck::{Pod, Zeroable};
 use eframe::{egui, egui_wgpu::RenderState};
 use std::{fs::File, io::BufReader, num::NonZeroU64, ops::Range, path::PathBuf};
@@ -10,9 +10,15 @@ use wgpu::util::DeviceExt;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn aspect_canvas(mut canvas: Canvas, width: u32, height: u32) -> Canvas {
-    let center = [canvas.size[0] * 0.5 - canvas.origin[0], canvas.size[1] * 0.5 - canvas.origin[1]];
+    let center = [
+        canvas.size[0] * 0.5 - canvas.origin[0],
+        canvas.size[1] * 0.5 - canvas.origin[1],
+    ];
     canvas.size[0] = canvas.size[1] * width as f32 / height as f32;
-    canvas.origin = [canvas.size[0] * 0.5 - center[0], canvas.size[1] * 0.5 - center[1]];
+    canvas.origin = [
+        canvas.size[0] * 0.5 - center[0],
+        canvas.size[1] * 0.5 - center[1],
+    ];
     canvas
 }
 
@@ -138,7 +144,9 @@ impl PendingReadback {
         let _ = self.state.device.poll(wgpu::PollType::Poll);
         match self.receiver.try_recv() {
             Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => anyhow::bail!("GPU capture channel closed"),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                anyhow::bail!("GPU capture channel closed")
+            }
             Ok(result) => {
                 result.context("GPU capture mapping failed")?;
                 let mapped = self.buffer.slice(..).get_mapped_range()?;
@@ -296,15 +304,37 @@ impl ModelRenderer {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut encoder = self.state.device.create_command_encoder(&Default::default());
-        encoder.copy_texture_to_buffer(texture.as_image_copy(), wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: Some(size.height) },
-        }, size);
+        let mut encoder = self
+            .state
+            .device
+            .create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(size.height),
+                },
+            },
+            size,
+        );
         self.state.queue.submit([encoder.finish()]);
         let (sender, receiver) = std::sync::mpsc::channel();
-        buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| { let _ = sender.send(result); });
-        Ok(PendingReadback { state: self.state.clone(), buffer, receiver, width: size.width, height: size.height, stride })
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result);
+            });
+        Ok(PendingReadback {
+            state: self.state.clone(),
+            buffer,
+            receiver,
+            width: size.width,
+            height: size.height,
+            stride,
+        })
     }
     pub fn key_palette(&self) -> Result<crate::chroma::Palette> {
         let (rgba, _) = self.read_rgba()?;
@@ -381,7 +411,10 @@ impl ModelRenderer {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        ensure!((16..=8192).contains(&width) && (16..=8192).contains(&height), "Invalid canvas size");
+        ensure!(
+            (16..=8192).contains(&width) && (16..=8192).contains(&height),
+            "Invalid canvas size"
+        );
         let device = &state.device;
         let queue = &state.queue;
         let mut palette = crate::chroma::Palette::default();
@@ -602,7 +635,7 @@ impl ModelRenderer {
         let unclipped = style_group(&white.create_view(&Default::default()));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Valkyrie Purism"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("cubism.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("model_mesh.wgsl").into()),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Cubism pipeline"),
@@ -703,7 +736,11 @@ impl ModelRenderer {
                 .extend(drawables.iter().map(|d| layers.opacity(&d.id)));
             self.layer_config.clone_from(layers);
         }
-        self.view_canvas = fit_canvas(aspect_canvas(canvas, self.image.size.x as u32, self.image.size.y as u32), drawables, Some(self.view_canvas));
+        self.view_canvas = fit_canvas(
+            aspect_canvas(canvas, self.image.size.x as u32, self.image.size.y as u32),
+            drawables,
+            Some(self.view_canvas),
+        );
         let vertices = &mut self.vertex_staging;
         vertices.clear();
         let uniform_bytes = &mut self.style_staging;
@@ -712,8 +749,12 @@ impl ModelRenderer {
         for (i, d) in drawables.iter().enumerate() {
             vertices.extend(d.positions.iter().zip(&d.uvs).map(|(p, &uv)| Vertex {
                 position: [
-                    (2.0 * (p[0] * c.pixels_per_unit + c.origin[0]) / c.size[0] - 1.0) * self.view_zoom + self.view_pan[0],
-                    (2.0 * (p[1] * c.pixels_per_unit + c.origin[1]) / c.size[1] - 1.0) * self.view_zoom + self.view_pan[1],
+                    (2.0 * (p[0] * c.pixels_per_unit + c.origin[0]) / c.size[0] - 1.0)
+                        * self.view_zoom
+                        + self.view_pan[0],
+                    (2.0 * (p[1] * c.pixels_per_unit + c.origin[1]) / c.size[1] - 1.0)
+                        * self.view_zoom
+                        + self.view_pan[1],
                 ],
                 uv,
             }));
@@ -824,7 +865,9 @@ pub(crate) fn straight_alpha(pixel: [u8; 4]) -> [u8; 4] {
     if alpha == 0 {
         return [0; 4];
     }
-    if alpha == 255 { return pixel; }
+    if alpha == 255 {
+        return pixel;
+    }
     let channel = |v: u8| ((u32::from(v) * 255 + alpha / 2) / alpha).min(255) as u8;
     [
         channel(pixel[0]),

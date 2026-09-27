@@ -20,10 +20,15 @@ pub fn margins(preset: &str, custom: [f32; 4]) -> Option<[f32; 4]> {
     match preset {
         "Custom" => Some(custom),
         "All platforms" => Some(PRESETS.iter().fold([0.0; 4], |mut acc, (_, margin)| {
-            for i in 0..4 { acc[i] = acc[i].max(margin[i]); }
+            for i in 0..4 {
+                acc[i] = acc[i].max(margin[i]);
+            }
             acc
         })),
-        _ => PRESETS.iter().find(|(name, _)| *name == preset).map(|(_, margin)| *margin),
+        _ => PRESETS
+            .iter()
+            .find(|(name, _)| *name == preset)
+            .map(|(_, margin)| *margin),
     }
 }
 
@@ -33,6 +38,10 @@ mod tests {
     #[test]
     fn combined_safe_area_contains_every_platform() {
         let all = margins("All platforms", [0.0; 4]).unwrap();
-        for (_, values) in PRESETS { for i in 0..4 { assert!(all[i] >= values[i]); } }
+        for (_, values) in PRESETS {
+            for i in 0..4 {
+                assert!(all[i] >= values[i]);
+            }
+        }
     }
 }
