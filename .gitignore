@@ -4,6 +4,7 @@ vendor/
 .tools/
 build*/
 dist/
+target/
 .env
 .credentials/
 output/
