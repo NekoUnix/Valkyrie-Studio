@@ -2,7 +2,7 @@
 
 ## Tests and platform builds
 
-GitHub Actions builds and runs Cargo tests on Windows x64, macOS Apple Silicon, macOS Intel, Ubuntu x64, Fedora x64, and Arch x64. All six jobs passed on the initial Rust PR commit. The final release-tag workflow must pass again for the final commit; [check its run](https://github.com/NekoUnix/Valkyrie-Studio/actions/workflows/rust-builds.yml). Cross-platform CI confirms compilation and unit behavior, not target-device GPU, camera, audio, or FFmpeg operation. The development PC's Windows release build is the only one exercised with the supplied local model.
+GitHub Actions builds and runs Cargo tests on Windows x64, macOS Apple Silicon, macOS Intel, Ubuntu x64, Fedora x64, and Arch x64. All six jobs passed for [PR #3](https://github.com/NekoUnix/Valkyrie-Studio/pull/3), including the Windows portable-package build. The final release-tag workflow must pass again for the tagged commit; [check its run](https://github.com/NekoUnix/Valkyrie-Studio/actions/workflows/rust-builds.yml). Cross-platform CI confirms compilation and unit behavior, not target-device GPU, camera, audio, or FFmpeg operation. The development PC's Windows release build is the only one exercised with the supplied local model.
 
 ## Windows model and export checks
 
@@ -14,6 +14,6 @@ The independent spring physics loads the local model and renders without process
 
 For alpha 3, the A.R.I.A-derived solver passed 41 library tests, including fixed-step behavior at several frame rates, group isolation, energy bounds, pause recovery, and settings validation. The local model diagnostic loaded 62 physics groups and 208 parameters; a direct drive of its fast-tail input moved the output and the final one-second trace had no measurable oscillation at the calmer tail default. The optimized Windows binary compiled. The new Physics panel, native model picker, horizontal canvas control, and icon compile; this pass has not yet measured their live GUI behavior or horizontal video export.
 
-The local GNU/LLVM Windows toolchain compiled the optimized Studio and Agent binaries, but its linker repeatedly received `Permission denied` while writing the separate `valkyrie-perform` executable. The source and unit tests for that binary passed. A complete alpha 3 portable archive therefore awaits the Windows CI build; the local package attempt did not complete.
+The local GNU/LLVM Windows toolchain compiled the optimized Studio and Agent binaries, but its linker repeatedly received `Permission denied` while writing the separate `valkyrie-perform` executable. The source and unit tests for that binary passed. GitHub's Windows PR build completed the portable package; the local alpha 3 package attempt did not complete.
 
-The Windows portable archive was extracted to a separate folder and launched with the external local model. Its packaged `valkyrie-agent.exe --connect` reported READY. An archive entry check found the three binaries, docs, webcam helper, walkthrough, and Purism MIT notice, and found no model manifest, `.moc3`, session token, or credentials.
+For the previous Rust alpha, the Windows portable archive was extracted to a separate folder and launched with the external local model. Its packaged `valkyrie-agent.exe --connect` reported READY. An archive entry check found the three binaries, docs, webcam helper, walkthrough, and Purism MIT notice, and found no model manifest, `.moc3`, session token, or credentials. The alpha 3 archive has not had that hands-on extraction check.
