@@ -1,6 +1,6 @@
 [package]
 name = "valkyrie-studio"
-version = "0.3.0-alpha.1"
+version = "0.3.0-alpha.3"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
@@ -17,6 +17,7 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "dx12"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rodio = { version = "=0.22.2", default-features = false, features = ["playback", "wav", "mp3", "vorbis", "flac"] }
+rfd = "0.17.2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

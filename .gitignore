@@ -12,6 +12,8 @@ tmp/
 *.log
 __pycache__/
 user-settings.json
+recent-models.json
+physics-profiles/
 # Model packages are always local inputs, never repository assets.
 models/
 assets/models/

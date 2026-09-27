@@ -3,6 +3,7 @@
 use eframe::{egui, egui_wgpu::RenderState};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     env, fs,
     net::IpAddr,
     path::{Path, PathBuf},
@@ -18,16 +19,29 @@ use valkyrie_studio::{
     guides,
     model::ModelAssets,
     network::{Inbox, Network, NetworkConfig, new_token},
-    physics::Physics,
+    physics::{GroupSettings, MotionStyle, Physics, PhysicsSettings},
     purism::CubismModel,
     renderer::ModelRenderer,
     tracking::{Mapper, Parameter, Values},
     voice::{self, VoiceChoice, VoiceConfig},
 };
 
+#[path = "studio/studio_ui.rs"]
+mod studio_ui;
+use studio_ui::configure_theme;
+
 enum VoiceEvent {
     Voices(Result<Vec<VoiceChoice>, String>),
     Speech(Result<(AudioClip, PathBuf, bool), String>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StudioTab {
+    Stage,
+    Physics,
+    Voice,
+    Capture,
+    Inputs,
 }
 
 fn main() -> eframe::Result {
@@ -48,10 +62,20 @@ fn main() -> eframe::Result {
         setup.instance_descriptor.backends =
             wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12);
     }
+    let icon = image::load_from_memory(include_bytes!("../../assets/valkyrie-icon-256.png"))
+        .expect("bundled app icon")
+        .thumbnail(256, 256)
+        .to_rgba8();
+    let icon = egui::IconData {
+        rgba: icon.as_raw().clone(),
+        width: icon.width(),
+        height: icon.height(),
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Valkyrie Studio — Alpha")
             .with_app_id("com.nekounix.valkyrie-studio")
+            .with_icon(icon)
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([900.0, 600.0]),
         renderer: eframe::Renderer::Wgpu,
@@ -70,6 +94,12 @@ struct Studio {
     model: Option<CubismModel>,
     renderer: Option<ModelRenderer>,
     physics: Option<Physics>,
+    physics_settings: PhysicsSettings,
+    physics_defaults: PhysicsSettings,
+    physics_profile_id: Option<String>,
+    physics_search: String,
+    physics_modified_only: bool,
+    physics_dirty: Option<Instant>,
     mapper: Option<Mapper>,
     engine: Engine,
     inbox: Inbox,
@@ -81,13 +111,17 @@ struct Studio {
     model_path: Option<PathBuf>,
     data_dir: PathBuf,
     path_field: String,
+    recent_models: Vec<PathBuf>,
     startup_model: Option<PathBuf>,
     notice: String,
     zoom: f32,
     pan: egui::Vec2,
     ui_scale: f32,
+    selected_tab: StudioTab,
     guide: &'static str,
     show_guides: bool,
+    mock_ui: bool,
+    guide_opacity: f32,
     guide_margins: [f32; 4],
     canvas: [u32; 2],
     last_frame: Instant,
@@ -118,6 +152,7 @@ struct Studio {
 
 impl Studio {
     fn new(cc: &eframe::CreationContext<'_>, startup_model: Option<PathBuf>) -> Self {
+        configure_theme(&cc.egui_ctx);
         let inbox = Inbox::new();
         let mut notice = "Load a local .model3.json to begin.".to_owned();
         let data_dir = app_paths::data_dir().unwrap_or_else(|error| {
@@ -157,6 +192,12 @@ impl Studio {
                 Err(error) => notice = format!("Agent API unavailable: {error}"),
             }
         }
+        let recent_models: Vec<PathBuf> = fs::read(data_dir.join("recent-models.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        let startup_model =
+            startup_model.or_else(|| recent_models.iter().find(|p| p.is_file()).cloned());
         let (voice_events, voice_results) = mpsc::channel();
         let voice = VoiceConfig::load_saved(&data_dir);
         Self {
@@ -164,6 +205,12 @@ impl Studio {
             model: None,
             renderer: None,
             physics: None,
+            physics_settings: PhysicsSettings::default(),
+            physics_defaults: PhysicsSettings::default(),
+            physics_profile_id: None,
+            physics_search: String::new(),
+            physics_modified_only: false,
+            physics_dirty: None,
             mapper: None,
             engine: Engine::new(EngineConfig::default()),
             inbox,
@@ -178,12 +225,16 @@ impl Studio {
                 .as_ref()
                 .map_or(String::new(), |p| p.display().to_string()),
             startup_model,
+            recent_models,
             notice,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             ui_scale: 1.0,
+            selected_tab: StudioTab::Stage,
             guide: "All platforms",
             show_guides: true,
+            mock_ui: true,
+            guide_opacity: 0.30,
             guide_margins: [0.06, 0.12, 0.2, 0.25],
             canvas: [1080, 1920],
             last_frame: Instant::now(),
@@ -218,7 +269,19 @@ impl Studio {
             !self.is_recording(),
             "Stop recording before changing models"
         );
+        if self.physics_dirty.is_some() {
+            self.save_physics_settings()?;
+        }
         let assets = ModelAssets::open(path)?;
+        let profile_id = format!(
+            "{:016x}",
+            assets
+                .moc
+                .iter()
+                .fold(0xcbf29ce484222325_u64, |hash, byte| {
+                    (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+                })
+        );
         let mut model = CubismModel::load(Path::new(""), &assets.moc, assets.textures.len())?;
         model.update()?;
         let state = self
@@ -240,11 +303,89 @@ impl Studio {
             max: p.max,
             default: p.default,
         }));
-        let physics = assets
+        let mut physics = assets
             .physics
             .as_ref()
             .map(|definition| Physics::load(definition, model.parameters()))
             .transpose()?;
+        let mut physics_settings = PhysicsSettings::default();
+        if let Some(active) = &mut physics {
+            if let Some(vtube) = &assets.vtube {
+                let imported = &vtube["PhysicsSettings"];
+                physics_settings.enabled = imported["Use"].as_bool().unwrap_or(true);
+                physics_settings.strength =
+                    (imported["PhysicsStrength"].as_f64().unwrap_or(50.0) as f32 / 50.0)
+                        .clamp(0.0, 2.0);
+                physics_settings.wind = (imported["WindStrength"].as_f64().unwrap_or(0.0) as f32
+                    / 100.0)
+                    .clamp(-1.0, 1.0);
+                let mut multipliers = BTreeMap::new();
+                if let Some(rows) =
+                    vtube["PhysicsCustomizationSettings"]["PhysicsMultipliersPerPhysicsGroup"]
+                        .as_array()
+                {
+                    for row in rows.iter().take(256) {
+                        if let (Some(id), Some(value)) = (row["ID"].as_str(), row["Value"].as_f64())
+                        {
+                            if value.is_finite() && id.len() <= 256 {
+                                multipliers.insert(id.to_owned(), (value as f32).clamp(0.0, 5.0));
+                            }
+                        }
+                    }
+                }
+                active.set_multipliers(&multipliers);
+                if let Some(rows) =
+                    vtube["PhysicsCustomizationSettings"]["WindMultipliersPerPhysicsGroup"]
+                        .as_array()
+                {
+                    for row in rows.iter().take(256) {
+                        if let (Some(id), Some(value)) = (row["ID"].as_str(), row["Value"].as_f64())
+                        {
+                            if value.is_finite() && id.len() <= 256 {
+                                physics_settings
+                                    .groups
+                                    .entry(id.to_owned())
+                                    .or_default()
+                                    .wind =
+                                    (physics_settings.wind * (value as f32 - 1.0)).clamp(-1.0, 1.0);
+                            }
+                        }
+                    }
+                }
+            }
+            // New models use a calmer baseline for tail-named chains. Existing
+            // saved groups retain their user's tuning.
+            for group in active.groups() {
+                if group.name.to_ascii_lowercase().contains("tail") {
+                    physics_settings
+                        .groups
+                        .entry(group.id)
+                        .or_insert(GroupSettings {
+                            inertia: 0.55,
+                            ..Default::default()
+                        });
+                }
+            }
+            let physics_defaults = physics_settings.clone();
+            let profile = self
+                .data_dir
+                .join("physics-profiles")
+                .join(format!("{profile_id}.json"));
+            if let Ok(bytes) = fs::read(profile) {
+                if let Ok(mut saved) = serde_json::from_slice::<PhysicsSettings>(&bytes) {
+                    if saved.validate().is_ok() {
+                        for (id, group) in &physics_defaults.groups {
+                            saved.groups.entry(id.clone()).or_insert(*group);
+                        }
+                        physics_settings = saved;
+                    }
+                }
+            }
+            active.configure(&physics_settings);
+            self.physics_defaults = physics_defaults;
+        } else {
+            self.physics_defaults = PhysicsSettings::default();
+        }
         self.notice = format!(
             "Loaded {} with {} parameters and {} atlases.",
             assets
@@ -255,12 +396,65 @@ impl Studio {
             model.parameters().len(),
             assets.textures.len()
         );
-        self.model_path = Some(assets.manifest);
+        self.model_path = Some(assets.manifest.clone());
         self.renderer = Some(renderer);
         self.physics = physics;
+        self.physics_settings = physics_settings;
+        self.physics_dirty = None;
+        self.physics_profile_id = Some(profile_id);
+        self.recent_models.retain(|p| p != &assets.manifest);
+        self.recent_models.insert(0, assets.manifest);
+        self.recent_models.truncate(8);
+        let _ = fs::create_dir_all(&self.data_dir);
+        let _ = fs::write(
+            self.data_dir.join("recent-models.json"),
+            serde_json::to_vec_pretty(&self.recent_models)?,
+        );
         self.mapper = Some(mapper);
         self.model = Some(model);
         self.engine = Engine::new(EngineConfig::default());
+        Ok(())
+    }
+
+    fn save_physics_settings(&mut self) -> anyhow::Result<()> {
+        self.physics_settings.validate()?;
+        let id = self
+            .physics_profile_id
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Load a model first"))?;
+        let dir = self.data_dir.join("physics-profiles");
+        fs::create_dir_all(&dir)?;
+        fs::write(
+            dir.join(format!("{id}.json")),
+            serde_json::to_vec_pretty(&self.physics_settings)?,
+        )?;
+        if let Some(physics) = &mut self.physics {
+            physics.configure(&self.physics_settings);
+        }
+        self.physics_dirty = None;
+        Ok(())
+    }
+
+    fn change_canvas(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.is_recording(),
+            "Stop recording before changing canvas size"
+        );
+        anyhow::ensure!(
+            (16..=8192).contains(&width)
+                && width % 2 == 0
+                && (16..=8192).contains(&height)
+                && height % 2 == 0,
+            "Canvas dimensions must be even values from 16 to 8192"
+        );
+        let previous = self.canvas;
+        self.canvas = [width, height];
+        if let Some(path) = self.model_path.clone() {
+            if let Err(error) = self.load_model(&path) {
+                self.canvas = previous;
+                return Err(error);
+            }
+        }
         Ok(())
     }
 
@@ -273,10 +467,12 @@ impl Studio {
             "view": {"zoom": self.zoom, "x": self.pan.x, "y": self.pan.y},
             "canvas": {"width": self.canvas[0], "height": self.canvas[1]},
             "guides": {"preset": self.guide, "enabled": self.show_guides,
+                "mock_ui": self.mock_ui, "opacity": self.guide_opacity,
                 "margins": guides::margins(self.guide, self.guide_margins)},
             "notice": self.notice,
             "voice": self.voice.public_status(),
             "voice_busy": self.voice_busy,
+            "physics": self.physics.as_ref().map(|p| json!({"settings": self.physics_settings, "group_count": p.group_count()})),
             "audio_path": self.audio_path.as_ref().map(|p| p.display().to_string()),
             "audio_duration": self.audio_clip.as_ref().map(|clip| clip.duration),
             "recording": self.export.as_ref().map(Export::stats),
@@ -352,6 +548,22 @@ impl Studio {
                     json!({"parameters": model.parameters(), "drawables": model.drawables.iter().map(|d| &d.id).collect::<Vec<_>>(), "canvas": model.canvas}),
                 )
             }
+            "physics" => {
+                anyhow::ensure!(self.physics.is_some(), "Load a model with physics first");
+                if request["settle"] == true {
+                    self.physics.as_mut().unwrap().reset();
+                }
+                if !request["settings"].is_null() {
+                    let settings: PhysicsSettings =
+                        serde_json::from_value(request["settings"].clone())?;
+                    settings.validate()?;
+                    self.physics_settings = settings;
+                    self.save_physics_settings()?;
+                }
+                Ok(
+                    json!({"settings": self.physics_settings, "groups": self.physics.as_ref().unwrap().groups()}),
+                )
+            }
             "mode" => {
                 self.engine
                     .set_mode(request["mode"].as_str().unwrap_or(""))?;
@@ -396,10 +608,6 @@ impl Studio {
                 Ok(json!(true))
             }
             "canvas" => {
-                anyhow::ensure!(
-                    !self.is_recording(),
-                    "Stop recording before changing canvas size"
-                );
                 let width = request["width"]
                     .as_u64()
                     .ok_or_else(|| anyhow::anyhow!("Missing width"))?;
@@ -407,16 +615,10 @@ impl Studio {
                     .as_u64()
                     .ok_or_else(|| anyhow::anyhow!("Missing height"))?;
                 anyhow::ensure!(
-                    (16..=8192).contains(&width)
-                        && width % 2 == 0
-                        && (16..=8192).contains(&height)
-                        && height % 2 == 0,
-                    "Canvas dimensions must be even values from 16 to 8192"
+                    width <= 8192 && height <= 8192,
+                    "Canvas dimensions must be at most 8192"
                 );
-                self.canvas = [width as u32, height as u32];
-                if let Some(path) = self.model_path.clone() {
-                    self.load_model(&path)?;
-                }
+                self.change_canvas(width as u32, height as u32)?;
                 Ok(json!(true))
             }
             "guides" => {
@@ -430,6 +632,16 @@ impl Studio {
                 }
                 if let Some(enabled) = request["enabled"].as_bool() {
                     self.show_guides = enabled;
+                }
+                if let Some(mock_ui) = request["mock_ui"].as_bool() {
+                    self.mock_ui = mock_ui;
+                }
+                if let Some(opacity) = request["opacity"].as_f64() {
+                    anyhow::ensure!(
+                        (0.0..=0.8).contains(&opacity),
+                        "Guide opacity must be 0–0.8"
+                    );
+                    self.guide_opacity = opacity as f32;
                 }
                 if let Some(values) = request["margins"].as_array() {
                     anyhow::ensure!(values.len() == 4, "Four guide margins required");
@@ -725,7 +937,7 @@ impl Studio {
         }
     }
 
-    fn update_model(&mut self, dt: f64) {
+    fn update_model(&mut self, dt: f64, physics_dt: f64) {
         let (Some(model), Some(mapper), Some(renderer)) = (
             self.model.as_mut(),
             self.mapper.as_ref(),
@@ -751,7 +963,7 @@ impl Studio {
             model.set_parameter(&id, value);
         }
         if let Some(physics) = &mut self.physics {
-            physics.step(model.parameters_mut(), dt as f32);
+            physics.step(model.parameters_mut(), physics_dt.min(1.0) as f32);
         }
         if let Err(error) = model.update() {
             self.notice = format!("Model error: {error}");
@@ -789,189 +1001,13 @@ impl Studio {
 
 impl eframe::App for Studio {
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = root_ui.ctx().clone();
-        let now = Instant::now();
-        let dt = now.duration_since(self.last_frame).as_secs_f64().min(0.1);
-        self.last_frame = now;
-        ctx.set_pixels_per_point(self.ui_scale);
-        if let Some(path) = self.startup_model.take() {
-            if let Err(error) = self.load_model(&path) {
-                self.notice = error.to_string();
-            }
+        self.render_ui(root_ui);
+    }
+
+    fn on_exit(&mut self) {
+        if self.physics_dirty.is_some() {
+            let _ = self.save_physics_settings();
         }
-        self.process_network();
-        self.poll_voice();
-        self.update_model(dt);
-        self.frame_count += 1;
-        if self.fps_since.elapsed() >= Duration::from_secs(1) {
-            self.fps = self.frame_count as f32 / self.fps_since.elapsed().as_secs_f32();
-            self.frame_count = 0;
-            self.fps_since = Instant::now();
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
-            let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
-        }
-        egui::Panel::left("controls").default_size(310.0).resizable(true).show(root_ui, |ui| {
-          egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("Valkyrie Studio");
-            ui.label("Rust + Purism Core · Alpha");
-            ui.separator();
-            ui.label("Model manifest (.model3.json)");
-            ui.text_edit_singleline(&mut self.path_field);
-            if ui.button("Load model").clicked() {
-                let path = PathBuf::from(self.path_field.trim());
-                if let Err(error) = self.load_model(&path) { self.notice = error.to_string(); }
-            }
-            ui.separator();
-            ui.label(format!("Mode: {}", self.engine.mode));
-            ui.horizontal_wrapped(|ui| {
-                for mode in ["agent", "phone", "webcam", "idle"] {
-                    if ui.selectable_label(self.engine.mode == mode, mode).clicked() { let _ = self.engine.set_mode(mode); }
-                }
-            });
-            ui.collapsing("Phone and webcam tracking", |ui| {
-                ui.label("UDP listen address (127.0.0.1 for this PC, 0.0.0.0 for a trusted LAN)");
-                ui.text_edit_singleline(&mut self.tracking_bind_field);
-                ui.label("UDP ports, comma separated");
-                ui.text_edit_singleline(&mut self.tracking_ports_field);
-                if ui.button("Apply listening addresses").clicked() {
-                    if let Err(error) = self.restart_tracking() { self.notice = error.to_string(); }
-                }
-                if let Some(active) = &self.network {
-                    ui.small(format!("Listening: {}", active.tracking_addresses.iter()
-                        .map(ToString::to_string).collect::<Vec<_>>().join(", ")));
-                }
-                ui.small("Set your phone sender destination to this PC's LAN IP and one listed port. Webcam helper sends to localhost:15483.");
-            });
-            ui.label("Framing");
-            ui.add(egui::Slider::new(&mut self.zoom, 0.1..=30.0).text("Zoom"));
-            ui.add(egui::Slider::new(&mut self.pan.x, -12.0..=12.0).text("Pan X"));
-            ui.add(egui::Slider::new(&mut self.pan.y, -12.0..=12.0).text("Pan Y"));
-            ui.separator();
-            ui.label("Portrait guides");
-            ui.checkbox(&mut self.show_guides, "Show safe areas");
-            egui::ComboBox::from_id_salt("guide").selected_text(self.guide).show_ui(ui, |ui| {
-                for name in std::iter::once("All platforms").chain(guides::PRESETS.iter().map(|(name, _)| *name)).chain(std::iter::once("Custom")) {
-                    ui.selectable_value(&mut self.guide, name, name);
-                }
-            });
-            if self.guide == "Custom" {
-                for (index, label) in ["Left", "Top", "Right", "Bottom"].iter().enumerate() {
-                    ui.add(egui::Slider::new(&mut self.guide_margins[index], 0.0..=0.45).text(*label));
-                }
-            }
-            ui.separator();
-            ui.add(egui::Slider::new(&mut self.ui_scale, 0.75..=2.5).text("UI scale"));
-            if let Some(active) = &self.network { ui.small(format!("Agent API: {}", active.api_address)); }
-            ui.label(&self.notice);
-            ui.small(format!("{:.1} FPS · model {:.1} ms · render {:.1} ms · capture {:.1} ms", self.fps, self.model_ms, self.render_ms, self.capture_ms));
-            ui.small("F11 toggles fullscreen. No model files are bundled.");
-            ui.separator();
-            ui.heading("Voice");
-            ui.horizontal(|ui| {
-                for provider in ["elevenlabs", "openai"] {
-                    let label = if provider == "elevenlabs" { "ElevenLabs" } else { "OpenAI" };
-                    if ui.selectable_label(self.voice_provider == provider, label).clicked() { self.voice_provider = provider; }
-                }
-            });
-            if self.voice_provider == "elevenlabs" {
-                ui.label(if self.voice.elevenlabs_key.is_some() { "ElevenLabs key available" } else { "Add an ElevenLabs key" });
-                if ui.button("Refresh my voices").clicked() {
-                    if let Err(error) = self.refresh_voices() { self.notice = error.to_string(); }
-                }
-                let current = self.voices.iter().find(|v| v.voice_id == self.voice.elevenlabs_voice)
-                    .map_or("Select a voice", |v| v.name.as_str());
-                egui::ComboBox::from_id_salt("eleven-voices").selected_text(current).show_ui(ui, |ui| {
-                    for choice in &self.voices {
-                        ui.selectable_value(&mut self.voice.elevenlabs_voice, choice.voice_id.clone(), &choice.name);
-                    }
-                });
-                ui.text_edit_singleline(&mut self.voice.elevenlabs_model);
-            } else {
-                ui.label(if self.voice.openai_key.is_some() { "OpenAI key available" } else { "Add an OpenAI key" });
-                egui::ComboBox::from_id_salt("openai-voices").selected_text(&self.voice.openai_voice).show_ui(ui, |ui| {
-                    for choice in voice::OPENAI_VOICES { ui.selectable_value(&mut self.voice.openai_voice, (*choice).into(), *choice); }
-                });
-                ui.add(egui::Slider::new(&mut self.voice.speed, 0.25..=4.0).text("Speed"));
-            }
-            ui.add(egui::TextEdit::singleline(&mut self.key_field).password(true).hint_text("API key (kept off screen)"));
-            ui.checkbox(&mut self.remember_key, "Remember on this Windows account");
-            ui.horizontal(|ui| {
-                if ui.button("Use key").clicked() {
-                    let provider = self.voice_provider;
-                    match self.voice.set_key(provider, &self.key_field, &self.data_dir, self.remember_key) {
-                        Ok(()) => { self.key_field.clear(); self.notice = "Voice key ready.".into(); }
-                        Err(error) => self.notice = error.to_string(),
-                    }
-                }
-                if ui.button("Forget key").clicked() {
-                    if let Err(error) = self.voice.forget_key(self.voice_provider, &self.data_dir) { self.notice = error.to_string(); }
-                }
-            });
-            ui.label("Typed dialogue");
-            ui.add(egui::TextEdit::multiline(&mut self.speech_text).desired_rows(4));
-            if ui.add_enabled(!self.voice_busy, egui::Button::new(if self.voice_busy { "Working…" } else { "Speak and animate" })).clicked() {
-                let provider = self.voice_provider;
-                let text = self.speech_text.clone();
-                let config = self.voice.clone();
-                if let Err(error) = self.start_tts(provider, &text, config, true) { self.notice = error.to_string(); }
-            }
-            ui.horizontal(|ui| {
-                if ui.button("Replay").clicked() { if let Err(error)=self.play_audio() { self.notice=error.to_string(); } }
-                if ui.button("Stop").clicked() { if let Some(player)=&mut self.audio_player { player.stop(); } }
-            });
-            ui.separator();
-            ui.heading("Record video");
-            ui.label("Output path (.mp4, .mov, or .webm)");
-            ui.text_edit_singleline(&mut self.record_output);
-            egui::ComboBox::from_id_salt("record-codec").selected_text(self.record_codec).show_ui(ui, |ui| {
-                for codec in ["h264", "h265", "prores", "vp9"] {
-                    ui.selectable_value(&mut self.record_codec, codec, codec);
-                }
-            });
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!self.is_recording(), egui::Button::new("Start recording")).clicked() {
-                    let path = PathBuf::from(self.record_output.trim());
-                    if let Err(error) = self.start_recording(path, 30, self.record_codec) { self.notice = error.to_string(); }
-                }
-                if ui.add_enabled(self.is_recording(), egui::Button::new("Stop recording")).clicked() {
-                    if let Some(export) = &mut self.export { export.stop(); }
-                }
-            });
-            if let Some(export) = &self.export { let stats = export.stats(); ui.small(format!("{} · {} frames · {} dropped", stats.state, stats.frames, stats.dropped)); }
-          });
-        });
-        egui::CentralPanel::default().show(root_ui, |ui| {
-            let bounds = ui.available_rect_before_wrap();
-            let aspect = self.canvas[0] as f32 / self.canvas[1] as f32;
-            let width = (bounds.height() * aspect).min(bounds.width());
-            let portrait =
-                egui::Rect::from_center_size(bounds.center(), egui::vec2(width, width / aspect));
-            ui.painter()
-                .rect_filled(portrait, 0.0, egui::Color32::from_rgb(24, 24, 32));
-            if let Some(renderer) = &self.renderer {
-                let rect = renderer.image.rect(portrait, 1.0);
-                ui.painter().image(
-                    renderer.image.id,
-                    rect,
-                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
-            } else {
-                ui.painter().text(
-                    portrait.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "Load a local model to preview it",
-                    egui::FontId::proportional(22.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-            }
-            if self.show_guides && aspect < 0.8 {
-                draw_guide(ui.painter(), portrait, self.guide, self.guide_margins);
-            }
-        });
-        ctx.request_repaint_after(Duration::from_millis(16));
     }
 }
 
@@ -1000,7 +1036,15 @@ fn parse_parameters(value: &Value) -> anyhow::Result<Values> {
         .collect()
 }
 
-fn draw_guide(painter: &egui::Painter, portrait: egui::Rect, platform: &str, custom: [f32; 4]) {
+fn draw_guide(
+    painter: &egui::Painter,
+    portrait: egui::Rect,
+    platform: &str,
+    custom: [f32; 4],
+    mock_ui: bool,
+    opacity: f32,
+) {
+    let painter = painter.with_clip_rect(portrait);
     let [left, top, right, bottom] = guides::margins(platform, custom).unwrap_or(custom);
     let safe = egui::Rect::from_min_max(
         egui::pos2(
@@ -1012,7 +1056,7 @@ fn draw_guide(painter: &egui::Painter, portrait: egui::Rect, platform: &str, cus
             portrait.bottom() - portrait.height() * bottom,
         ),
     );
-    let shade = egui::Color32::from_black_alpha(75);
+    let shade = egui::Color32::from_rgba_unmultiplied(13, 10, 28, (opacity * 255.0) as u8);
     for region in [
         egui::Rect::from_min_max(portrait.min, egui::pos2(portrait.right(), safe.top())),
         egui::Rect::from_min_max(egui::pos2(portrait.left(), safe.bottom()), portrait.max),
@@ -1030,14 +1074,262 @@ fn draw_guide(painter: &egui::Painter, portrait: egui::Rect, platform: &str, cus
     painter.rect_stroke(
         safe,
         0.0,
-        egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 240, 220)),
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(104, 231, 224)),
         egui::StrokeKind::Inside,
     );
-    painter.text(
-        safe.left_top() + egui::vec2(4.0, 4.0),
-        egui::Align2::LEFT_TOP,
-        platform,
-        egui::FontId::proportional(14.0),
-        egui::Color32::from_rgb(0, 240, 220),
+    let point = |x: f32, y: f32| {
+        egui::pos2(
+            portrait.left() + portrait.width() * x,
+            portrait.top() + portrait.height() * y,
+        )
+    };
+    let scale = (portrait.width() / 390.0).clamp(0.65, 1.3);
+    painter.rect_filled(
+        egui::Rect::from_min_max(point(0.0, 0.0), point(1.0, 0.07)),
+        0.0,
+        egui::Color32::from_black_alpha(190),
     );
+    painter.text(
+        point(0.035, 0.035),
+        egui::Align2::LEFT_CENTER,
+        format!("{}  ·  PREVIEW", platform),
+        egui::FontId::proportional(12.0 * scale),
+        egui::Color32::from_rgb(218, 248, 246),
+    );
+    painter.text(
+        safe.left_top() + egui::vec2(5.0, 5.0),
+        egui::Align2::LEFT_TOP,
+        "SAFE AREA",
+        egui::FontId::proportional(11.0 * scale),
+        egui::Color32::from_rgb(104, 231, 224),
+    );
+
+    if !mock_ui {
+        return;
+    }
+    let ink = egui::Color32::from_rgb(243, 246, 252);
+    let muted = egui::Color32::from_rgb(195, 205, 220);
+    let edge = egui::Stroke::new(1.7 * scale, ink);
+    let is_story = platform.contains("Stories") || platform == "WhatsApp Status";
+    if is_story {
+        for i in 0..4 {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    point(0.04 + i as f32 * 0.235, 0.085),
+                    point(0.255 + i as f32 * 0.235, 0.089),
+                ),
+                2.0,
+                egui::Color32::from_white_alpha(if i == 0 { 235 } else { 95 }),
+            );
+        }
+        painter.circle_filled(
+            point(0.09, 0.125),
+            12.0 * scale,
+            egui::Color32::from_rgb(125, 101, 195),
+        );
+        painter.text(
+            point(0.15, 0.125),
+            egui::Align2::LEFT_CENTER,
+            "@your_account",
+            egui::FontId::proportional(12.0 * scale),
+            ink,
+        );
+        painter.rect_stroke(
+            egui::Rect::from_min_max(point(0.055, 0.92), point(0.82, 0.975)),
+            13.0 * scale,
+            edge,
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            point(0.09, 0.948),
+            egui::Align2::LEFT_CENTER,
+            "Send a message…",
+            egui::FontId::proportional(12.0 * scale),
+            ink,
+        );
+        painter.text(
+            point(0.89, 0.948),
+            egui::Align2::CENTER_CENTER,
+            "♡",
+            egui::FontId::proportional(23.0 * scale),
+            ink,
+        );
+        return;
+    }
+
+    // Approximate occupied UI, not an official platform screenshot. All elements
+    // are painted over the preview and never enter the renderer's export target.
+    let (actions, navigation): ([&str; 4], [&str; 5]) = match platform {
+        "TikTok" => (
+            ["LIKE", "CHAT", "SAVE", "SHARE"],
+            ["Home", "Friends", "+", "Inbox", "Profile"],
+        ),
+        "YouTube Shorts" => (
+            ["LIKE", "CHAT", "REMIX", "SHARE"],
+            ["Home", "Shorts", "+", "Subs", "You"],
+        ),
+        "Instagram Reels" | "Facebook Reels" => (
+            ["LIKE", "CHAT", "SHARE", "SAVE"],
+            ["Home", "Search", "+", "Reels", "Profile"],
+        ),
+        "Snapchat Spotlight" => (
+            ["LIKE", "CHAT", "SHARE", "REMIX"],
+            ["Map", "Chat", "+", "Stories", "Spotlight"],
+        ),
+        "Pinterest" => (
+            ["SAVE", "CHAT", "SHARE", "MORE"],
+            ["Home", "Explore", "+", "Inbox", "Profile"],
+        ),
+        "X video" => (
+            ["LIKE", "CHAT", "REPOST", "SHARE"],
+            ["Home", "Search", "+", "Alerts", "Profile"],
+        ),
+        "LinkedIn video" => (
+            ["LIKE", "CHAT", "REPOST", "SHARE"],
+            ["Home", "Network", "+", "Alerts", "Jobs"],
+        ),
+        "Threads / Bluesky video" => (
+            ["LIKE", "CHAT", "REPOST", "SHARE"],
+            ["Home", "Search", "+", "Alerts", "Profile"],
+        ),
+        "Twitch vertical clips" => (
+            ["LIKE", "CHAT", "FOLLOW", "SHARE"],
+            ["Follow", "Discover", "+", "Inbox", "Profile"],
+        ),
+        _ => (
+            ["LIKE", "CHAT", "SAVE", "SHARE"],
+            ["Home", "Explore", "+", "Inbox", "Profile"],
+        ),
+    };
+    let rail_x = 0.91;
+    painter.circle_filled(
+        point(rail_x, 0.43),
+        19.0 * scale,
+        egui::Color32::from_rgb(93, 85, 153),
+    );
+    painter.circle_filled(
+        point(rail_x + 0.033, 0.463),
+        7.0 * scale,
+        egui::Color32::from_rgb(235, 95, 161),
+    );
+    painter.text(
+        point(rail_x + 0.033, 0.463),
+        egui::Align2::CENTER_CENTER,
+        "+",
+        egui::FontId::proportional(11.0 * scale),
+        ink,
+    );
+    for (i, label) in actions.iter().enumerate() {
+        let y = 0.54 + i as f32 * 0.085;
+        let center = point(rail_x, y);
+        match i {
+            0 => {
+                let a = center + egui::vec2(-7.0 * scale, -3.0 * scale);
+                let b = center + egui::vec2(7.0 * scale, -3.0 * scale);
+                painter.circle_stroke(a, 7.0 * scale, edge);
+                painter.circle_stroke(b, 7.0 * scale, edge);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        center + egui::vec2(-14.0 * scale, 0.0),
+                        center + egui::vec2(14.0 * scale, 0.0),
+                        center + egui::vec2(0.0, 15.0 * scale),
+                    ],
+                    ink,
+                    egui::Stroke::NONE,
+                ));
+            }
+            1 => {
+                painter.rect_stroke(
+                    egui::Rect::from_center_size(center, egui::vec2(29.0 * scale, 21.0 * scale)),
+                    7.0 * scale,
+                    edge,
+                    egui::StrokeKind::Inside,
+                );
+                painter.line_segment(
+                    [
+                        center + egui::vec2(-4.0 * scale, 10.0 * scale),
+                        center + egui::vec2(-9.0 * scale, 15.0 * scale),
+                    ],
+                    edge,
+                );
+            }
+            2 => {
+                painter.rect_stroke(
+                    egui::Rect::from_center_size(center, egui::vec2(21.0 * scale, 28.0 * scale)),
+                    2.0 * scale,
+                    edge,
+                    egui::StrokeKind::Inside,
+                );
+            }
+            _ => {
+                painter.line_segment(
+                    [
+                        center + egui::vec2(-12.0 * scale, 7.0 * scale),
+                        center + egui::vec2(11.0 * scale, -7.0 * scale),
+                    ],
+                    edge,
+                );
+                painter.line_segment(
+                    [
+                        center + egui::vec2(4.0 * scale, -12.0 * scale),
+                        center + egui::vec2(12.0 * scale, -7.0 * scale),
+                    ],
+                    edge,
+                );
+                painter.line_segment(
+                    [
+                        center + egui::vec2(12.0 * scale, -7.0 * scale),
+                        center + egui::vec2(7.0 * scale, 2.0 * scale),
+                    ],
+                    edge,
+                );
+            }
+        }
+        painter.text(
+            point(rail_x, y + 0.031),
+            egui::Align2::CENTER_TOP,
+            label,
+            egui::FontId::proportional(10.0 * scale),
+            ink,
+        );
+    }
+    painter.rect_filled(
+        egui::Rect::from_min_max(point(0.0, 0.82), point(1.0, 1.0)),
+        0.0,
+        egui::Color32::from_black_alpha(150),
+    );
+    painter.text(
+        point(0.06, 0.85),
+        egui::Align2::LEFT_CENTER,
+        "@your_account",
+        egui::FontId::proportional(14.0 * scale),
+        ink,
+    );
+    painter.text(
+        point(0.06, 0.885),
+        egui::Align2::LEFT_CENTER,
+        "Your caption appears here",
+        egui::FontId::proportional(12.0 * scale),
+        ink,
+    );
+    painter.text(
+        point(0.06, 0.913),
+        egui::Align2::LEFT_CENTER,
+        "#tags  ·  sound / music",
+        egui::FontId::proportional(11.0 * scale),
+        muted,
+    );
+    painter.line_segment(
+        [point(0.0, 0.944), point(1.0, 0.944)],
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(70)),
+    );
+    for (x, label) in [0.12, 0.32, 0.51, 0.70, 0.88].into_iter().zip(navigation) {
+        painter.text(
+            point(x, 0.967),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(10.0 * scale),
+            ink,
+        );
+    }
 }
