@@ -134,6 +134,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7.0.1
       - uses: actions/download-artifact@v7.0.1
         with:
           path: dist
@@ -142,4 +143,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --prerelease --generate-notes --title "Valkyrie Studio $GITHUB_REF_NAME"
+          notes="docs/RELEASE_NOTES_${GITHUB_REF_NAME#v}.md"
+          if [ -f "$notes" ]; then
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --prerelease --notes-file "$notes" --title "Valkyrie Studio $GITHUB_REF_NAME"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --prerelease --generate-notes --title "Valkyrie Studio $GITHUB_REF_NAME"
+          fi
