@@ -14,6 +14,7 @@ The API has a bounded command queue and packet length; high-rate tracking is coa
 |---|---|---|
 | `status` | — | Model, mode, guide, voice, recording and performance status; no provider key |
 | `schema` | — | Parameter ranges, drawable IDs and model canvas |
+| `physics` | optional `settings` object, `settle`: boolean | Read physics groups/settings; replace validated settings or clear momentum |
 | `mode` | `mode`: agent/phone/webcam/idle | Select control source |
 | `tracking` | `source`, `values` | Send pose/blendshape values |
 | `calibrate` | — | Reset neutral-pose calibration |
@@ -21,10 +22,10 @@ The API has a bounded command queue and packet length; high-rate tracking is coa
 | `parameters` / `parameters_clear` | Model parameter `values`, `duration` | Set or release direct parameters |
 | `view` | `zoom` 0.1–30, `x`/`y` −12–12 | Frame the model |
 | `canvas` | even `width`/`height`, 16–8192 | Reallocate output canvas before recording |
-| `guides` | `preset`, `enabled`, `margins` | Preview-only safe areas |
+| `guides` | `preset`, `enabled`, `mock_ui`, `opacity` 0–0.8, `margins` | Preview-only safe areas and representative platform controls |
 | `load_model` | `path` to `.model3.json` | Replace the primary model |
 | `snapshot` | new PNG `path` | Save the rendered canvas without guides |
-| `ui_settings` | `scale` 0.75–2.5 | Scale the UI |
+| `ui_settings` | `scale` 0.75–2.5 | Multiply the operating system's UI scale |
 | `elevenlabs_refresh_voices` | — | Load accessible account voices |
 | `elevenlabs_configure` / `voice_configure` | `settings`, optional `api_key`, `remember` | Set ElevenLabs/OpenAI voice settings |
 | `elevenlabs_forget_key` / `voice_forget_key` | — | Remove provider key |
@@ -34,3 +35,5 @@ The API has a bounded command queue and packet length; high-rate tracking is coa
 | `record_stop` | — | Stop capture; poll `status.recording.state` for `saved` or `failed` |
 
 `status.recording` includes `frames`, `captured`, `dropped`, `duplicates`, `output`, and `error`. UDP tracking can listen on editable addresses and ports in the UI; the agent TCP API remains loopback-only. Unsupported legacy operations return an explicit error. Never put session tokens or API keys in a script that will be committed.
+
+`physics` returns the model's group IDs, names, inputs, outputs, particle counts, imported multipliers and current settings. Its `settings` field is a complete `PhysicsSettings` object, so read it first and modify the fields you need before sending it back. `motion_style` is `Bouncy`, `Natural`, or `Authored`; overall settings are `enabled`, `strength` (0–2), `inertia` (0–2), `response` (0.25–2), `gravity` (0–2), `wind` (−1–1), and `groups` keyed by authored group ID. Group objects use the same fields. Edits save per model. `{"op":"physics","settle":true}` resets current momentum.

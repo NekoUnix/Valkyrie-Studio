@@ -11,6 +11,7 @@ pub struct ModelAssets {
     pub moc: Vec<u8>,
     pub textures: Vec<PathBuf>,
     pub physics: Option<Value>,
+    pub vtube: Option<Value>,
 }
 
 impl ModelAssets {
@@ -67,11 +68,21 @@ impl ModelAssets {
         } else {
             None
         };
+        let vtube = manifest
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|name| name.strip_suffix(".model3.json"))
+            .map(|stem| root.join(format!("{stem}.vtube.json")))
+            .filter(|path| path.is_file())
+            .filter(|path| fs::metadata(path).is_ok_and(|meta| meta.len() <= 20 * 1024 * 1024))
+            .and_then(|path| fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
         Ok(Self {
             manifest,
             moc: fs::read(moc_path)?,
             textures,
             physics,
+            vtube,
         })
     }
 }
