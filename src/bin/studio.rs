@@ -19,6 +19,7 @@ use valkyrie_studio::{
     guides,
     model::ModelAssets,
     network::{Inbox, Network, NetworkConfig, new_token},
+    performance::{EMOTIONS, default_gesture, v3_emotion_tag},
     physics::{GroupSettings, MotionStyle, Physics, PhysicsSettings},
     purism::CubismModel,
     renderer::ModelRenderer,
@@ -32,7 +33,7 @@ use studio_ui::configure_theme;
 
 enum VoiceEvent {
     Voices(Result<Vec<VoiceChoice>, String>),
-    Speech(Result<(AudioClip, PathBuf, bool), String>),
+    Speech(Result<(AudioClip, PathBuf, bool, Option<(String, f32)>), String>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -133,6 +134,9 @@ struct Studio {
     voice_results: Receiver<VoiceEvent>,
     voice_busy: bool,
     speech_text: String,
+    voice_emotion: String,
+    voice_expression_intensity: f32,
+    audio_cue: Option<(String, f32)>,
     voice_provider: &'static str,
     key_field: String,
     remember_key: bool,
@@ -246,6 +250,9 @@ impl Studio {
             voice_results,
             voice_busy: false,
             speech_text: String::new(),
+            voice_emotion: "neutral".into(),
+            voice_expression_intensity: 1.0,
+            audio_cue: None,
             voice_provider: "elevenlabs",
             key_field: String::new(),
             remember_key: cfg!(windows),
@@ -786,6 +793,12 @@ impl Studio {
                     text,
                     config,
                     request["autoplay"].as_bool().unwrap_or(true),
+                    request["emotion"].as_str().map(|emotion| {
+                        (
+                            emotion.to_owned(),
+                            request["intensity"].as_f64().unwrap_or(1.0) as f32,
+                        )
+                    }),
                 )?;
                 Ok(json!({"state":"generating"}))
             }
@@ -798,6 +811,7 @@ impl Studio {
                 let clip = AudioClip::decode(bytes)?;
                 self.audio_path = Some(path);
                 self.audio_clip = Some(clip);
+                self.audio_cue = None;
                 Ok(json!(true))
             }
             "audio_play" => {
@@ -872,14 +886,29 @@ impl Studio {
         text: &str,
         config: VoiceConfig,
         autoplay: bool,
+        cue: Option<(String, f32)>,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(!self.voice_busy, "Voice request already running");
         anyhow::ensure!(
             matches!(provider, "openai" | "elevenlabs"),
             "Choose OpenAI or ElevenLabs voice"
         );
+        if let Some((emotion, intensity)) = &cue {
+            anyhow::ensure!(EMOTIONS.contains(&emotion.as_str()), "Unknown emotion");
+            anyhow::ensure!(
+                intensity.is_finite() && (0.0..=5.0).contains(intensity),
+                "Expression intensity must be 0–5"
+            );
+        }
         let provider = provider.to_owned();
-        let text = text.to_owned();
+        let text = if provider == "elevenlabs" && config.elevenlabs_model == "eleven_v3" {
+            cue.as_ref()
+                .filter(|(_, intensity)| *intensity > 0.0)
+                .and_then(|(emotion, _)| v3_emotion_tag(emotion))
+                .map_or_else(|| text.to_owned(), |tag| format!("{tag} {text}"))
+        } else {
+            text.to_owned()
+        };
         let sender = self.voice_events.clone();
         let data_dir = self.data_dir.clone();
         self.voice_busy = true;
@@ -891,7 +920,7 @@ impl Studio {
                 fs::create_dir_all(&root)?;
                 let path = root.join(format!("speech-{}.{}", new_token()?, extension));
                 fs::write(&path, bytes)?;
-                Ok((clip, path, autoplay))
+                Ok((clip, path, autoplay, cue))
             })()
             .map_err(|error| error.to_string());
             let _ = sender.send(VoiceEvent::Speech(result));
@@ -913,10 +942,11 @@ impl Studio {
                     }
                     self.voices = voices;
                 }
-                VoiceEvent::Speech(Ok((clip, path, autoplay))) => {
+                VoiceEvent::Speech(Ok((clip, path, autoplay, cue))) => {
                     self.notice = format!("Speech ready ({:.1} s).", clip.duration);
                     self.audio_clip = Some(clip);
                     self.audio_path = Some(path);
+                    self.audio_cue = cue;
                     if autoplay {
                         if let Err(error) = self.play_audio() {
                             self.notice = error.to_string();
@@ -936,6 +966,17 @@ impl Studio {
             .ok_or_else(|| anyhow::anyhow!("Load or generate speech first"))?;
         if self.audio_player.is_none() {
             self.audio_player = Some(AudioPlayer::new()?);
+        }
+        if let Some((emotion, intensity)) = &self.audio_cue {
+            let now = self.started.elapsed().as_secs_f64();
+            self.engine
+                .emotion(emotion, *intensity, now + clip.duration)?;
+            if self.engine.mode == "agent" && *intensity > 0.0 {
+                if let Some(gesture) = default_gesture(emotion) {
+                    self.engine
+                        .gesture(gesture, (*intensity / 2.0).clamp(0.0, 2.0), 0.8, now)?;
+                }
+            }
         }
         self.audio_player.as_mut().unwrap().play(clip);
         Ok(())

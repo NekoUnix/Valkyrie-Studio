@@ -529,8 +529,8 @@ impl Studio {
     fn voice_controls(&mut self, ui: &mut egui::Ui) {
         Self::section(
             ui,
-            "Voice",
-            "Type a line, pick a voice, then animate speech.",
+            "1 · Choose a voice",
+            "Select a service and voice. Your key stays on this computer.",
         );
         ui.horizontal(|ui| {
             for provider in ["elevenlabs", "openai"] {
@@ -576,10 +576,31 @@ impl Studio {
                         );
                     }
                 });
-            ui.label(egui::RichText::new("ElevenLabs model").small().color(MUTED));
+            ui.label(egui::RichText::new("Speech model").small().color(MUTED));
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .selectable_label(
+                        self.voice.elevenlabs_model == "eleven_v3",
+                        "Eleven v3 · expressive",
+                    )
+                    .clicked()
+                {
+                    self.voice.elevenlabs_model = "eleven_v3".into();
+                }
+                if ui
+                    .selectable_label(
+                        self.voice.elevenlabs_model == "eleven_multilingual_v2",
+                        "Multilingual v2",
+                    )
+                    .clicked()
+                {
+                    self.voice.elevenlabs_model = "eleven_multilingual_v2".into();
+                }
+            });
             ui.add(
                 egui::TextEdit::singleline(&mut self.voice.elevenlabs_model)
-                    .desired_width(f32::INFINITY),
+                    .desired_width(f32::INFINITY)
+                    .hint_text("Or enter another ElevenLabs model ID"),
             );
         } else {
             ui.label(if self.voice.openai_key.is_some() {
@@ -635,10 +656,31 @@ impl Studio {
         ui.separator();
         Self::section(
             ui,
-            "Dialogue",
-            "Speech drives the model's mouth while audio plays.",
+            "2 · Direct the performance",
+            "The voice, face, and mouth follow the same line.",
         );
-        ui.label(egui::RichText::new("How it works: type a line, choose ElevenLabs or OpenAI and a voice above, then press Speak and animate. The service generates audio; Valkyrie plays it and uses its timing and volume to move the model's mouth. Select Agent in Inputs to add head and body motion at the same time. Recording captures the animated model and audio; an API key is needed for the chosen voice service.").small().color(MUTED));
+        ui.label("Expression");
+        egui::ComboBox::from_id_salt("voice-emotion")
+            .selected_text(&self.voice_emotion)
+            .width(ui.available_width())
+            .show_ui(ui, |ui| {
+                for emotion in EMOTIONS {
+                    ui.selectable_value(&mut self.voice_emotion, (*emotion).to_owned(), *emotion);
+                }
+            });
+        ui.add(
+            egui::Slider::new(&mut self.voice_expression_intensity, 0.0..=5.0)
+                .text("Expression strength"),
+        );
+        ui.small("0 = neutral strength, 1 = natural, 5 = strongest. Eleven v3 also receives a matching voice emotion tag. Mouth movement follows the generated audio.");
+        if self.engine.mode != "agent" {
+            ui.label(
+                egui::RichText::new(
+                    "For autonomous head and body movement, choose Agent in Inputs.",
+                )
+                .color(CYAN),
+            );
+        }
         ui.add(
             egui::TextEdit::multiline(&mut self.speech_text)
                 .desired_rows(7)
@@ -659,7 +701,8 @@ impl Studio {
             let provider = self.voice_provider;
             let text = self.speech_text.clone();
             let config = self.voice.clone();
-            if let Err(error) = self.start_tts(provider, &text, config, true) {
+            let cue = Some((self.voice_emotion.clone(), self.voice_expression_intensity));
+            if let Err(error) = self.start_tts(provider, &text, config, true, cue) {
                 self.notice = error.to_string();
             }
         }
@@ -674,6 +717,26 @@ impl Studio {
                     player.stop();
                 }
             }
+        });
+        ui.separator();
+        Self::section(
+            ui,
+            "3 · Make a long video",
+            "One script controls every voice line and matching model action.",
+        );
+        ui.small("Open the example below, edit its lines, then run valkyrie-perform with a fresh output filename. Each line's emotion chooses the Eleven v3 tag and facial expression; optional gestures and head cues play during that line's measured audio.");
+        ui.collapsing("See complete script example", |ui| {
+            let example = include_str!("../../../examples/vaelari_performance.json");
+            if ui.button("Copy example JSON").clicked() {
+                ui.ctx().copy_text(example.to_owned());
+                self.notice = "Example script copied. Save it as a .json file to edit.".into();
+            }
+            ui.monospace("valkyrie-perform --script my-video.json --output my-video.mp4");
+            egui::ScrollArea::vertical()
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(example).monospace().small());
+                });
         });
     }
 

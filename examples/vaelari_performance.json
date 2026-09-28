@@ -1,5 +1,6 @@
 {
   "provider": "elevenlabs",
+  "tts_model": "eleven_v3",
   "width": 1080,
   "height": 1920,
   "fps": 30,
@@ -10,6 +11,7 @@
     {
       "text": "Hello, I'm Vaelari. Welcome to Valkyrie Studio.",
       "emotion": "joy",
+      "expression_intensity": 1.4,
       "gesture": "nod",
       "pause": 0.18,
       "motion": [
@@ -20,19 +22,39 @@
     },
     {
       "text": "An AI agent can write my lines and direct my head movements while the studio keeps my lips matched to the voice.",
-      "emotion": "thinking",
-      "gesture": "tilt",
+      "emotion": "curious",
+      "expression_intensity": 2.0,
       "pause": 0.18
     },
     {
       "text": "For longer videos, it renders the script in synchronized chapters and joins them into one MP4.",
-      "emotion": "joy",
+      "emotion": "excited",
+      "expression_intensity": 3.0,
       "pause": 0.12,
       "motion": [
         { "at": 0.0, "yaw": 0 },
         { "at": 0.4, "yaw": -10, "pitch": 3 },
         { "at": 1.0, "yaw": 0 }
       ]
+    },
+    {
+      "text": "Now listen closely: every change in my voice has a matching change in my face and pose.",
+      "emotion": "thinking",
+      "expression_intensity": 1.8,
+      "gesture": "tilt",
+      "pause": 0.15,
+      "motion": [
+        { "at": 0.0, "yaw": -5, "pitch": 0, "roll": -2 },
+        { "at": 0.55, "yaw": 7, "pitch": 2, "roll": 3 },
+        { "at": 1.0, "yaw": 0, "pitch": 0, "roll": 0 }
+      ]
+    },
+    {
+      "text": "Thanks for watching. I'll see you in the next video!",
+      "emotion": "joy",
+      "expression_intensity": 2.2,
+      "gesture": "nod",
+      "pause": 0.18
     }
   ]
 }

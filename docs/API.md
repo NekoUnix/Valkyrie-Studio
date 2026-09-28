@@ -18,7 +18,7 @@ The API has a bounded command queue and packet length; high-rate tracking is coa
 | `mode` | `mode`: agent/phone/webcam/idle | Select control source |
 | `tracking` | `source`, `values` | Send pose/blendshape values |
 | `calibrate` | — | Reset neutral-pose calibration |
-| `emotion` | `name`: joy/thinking/angry/surprised/neutral, `intensity`, `duration` | Temporary expression |
+| `emotion` | `name`: neutral/joy/excited/curious/thinking/sad/angry/surprised, `intensity` 0–5, `duration` | Temporary expression; larger values strengthen facial features and bounded head pose |
 | `puppet` | optional `energy` 0–2 | Read or set automatic agent movement (default 1; 0 disables it) |
 | `gesture` | `name`: nod/shake/tilt/lean, optional `intensity` 0–2 and `duration` 0.2–5 seconds | Add a short gesture in agent mode without replacing tracking or speech |
 | `parameters` / `parameters_clear` | Model parameter `values`, `duration` | Set or release direct parameters |
@@ -31,7 +31,7 @@ The API has a bounded command queue and packet length; high-rate tracking is coa
 | `elevenlabs_refresh_voices` | — | Load accessible account voices |
 | `elevenlabs_configure` / `voice_configure` | `settings`, optional `api_key`, `remember` | Set ElevenLabs/OpenAI voice settings |
 | `elevenlabs_forget_key` / `voice_forget_key` | — | Remove provider key |
-| `tts` | `provider`, `text`, optional `voice`, `model`, `speed`, `instructions`, `autoplay` | Generate typed speech asynchronously |
+| `tts` | `provider`, `text`, optional `voice`, `model`, `speed`, `instructions`, `autoplay`, `emotion`, `intensity` 0–5 | Generate typed speech asynchronously; with `model: "eleven_v3"`, an emotion adds a matching voice tag, and autoplay applies the same face/gesture when audio starts |
 | `audio` / `audio_play` / `audio_stop` | local audio `path` | Load/play/stop a clip and mouth tracking |
 | `record_start` | `path` or `output`, `codec`, `fps` | Start video and loaded audio together |
 | `record_stop` | — | Stop capture; poll `status.recording.state` for `saved` or `failed` |
