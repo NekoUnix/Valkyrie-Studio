@@ -74,6 +74,18 @@ fn main() -> Result<()> {
         "Load a model in Valkyrie Studio before rendering"
     );
     let previous_energy = status["agent"]["motion_energy"].as_f64().unwrap_or(1.0);
+    let configured_model = status["voice"][if script.provider == "elevenlabs" {
+        "elevenlabs"
+    } else {
+        "openai"
+    }]["model"]
+        .as_str()
+        .unwrap_or(if script.provider == "elevenlabs" {
+            "eleven_multilingual_v2"
+        } else {
+            "gpt-4o-mini-tts"
+        })
+        .to_owned();
     session.send(json!({"op":"puppet","energy":script.motion_energy}))?;
     session.send(json!({"op":"canvas","width":script.width,"height":script.height}))?;
     session
@@ -89,7 +101,12 @@ fn main() -> Result<()> {
                 base.join(path)
             }
         } else {
-            generate(&mut session, &script.provider, line)?
+            let model = line
+                .tts_model
+                .as_deref()
+                .or(script.tts_model.as_deref())
+                .unwrap_or(&configured_model);
+            generate(&mut session, &script.provider, model, line)?
         };
         let samples = to_pcm24k(&AudioClip::decode(
             fs::read(&source).with_context(|| format!("Cannot read {}", source.display()))?,
@@ -149,12 +166,13 @@ fn main() -> Result<()> {
             {
                 let line = &prepared[group.start + line_index].line;
                 if last_line != Some(line_index) {
-                    if let Some(emotion) = &line.emotion {
-                        session
-                            .send(json!({"op":"emotion","name":emotion,"duration":length+pause}))?;
-                    }
-                    if let Some(gesture) = &line.gesture {
+                    session.send(json!({"op":"emotion",
+                        "name":line.emotion.as_deref().unwrap_or("neutral"),
+                        "intensity":line.expression_intensity,
+                        "duration":length+pause}))?;
+                    if let Some(gesture) = line.effective_gesture() {
                         session.send(json!({"op":"gesture","name":gesture,
+                            "intensity":if line.gesture.is_some() {1.0} else {(line.expression_intensity / 1.5).clamp(0.25, 2.0)},
                             "duration":length.min(1.0).max(0.35)}))?;
                     }
                     last_line = Some(line_index);
@@ -251,17 +269,16 @@ impl Session {
     }
 }
 
-fn generate(session: &mut Session, provider: &str, line: &Line) -> Result<PathBuf> {
+fn generate(session: &mut Session, provider: &str, model: &str, line: &Line) -> Result<PathBuf> {
     let previous = session.send(json!({"op":"status"}))?["audio_path"]
         .as_str()
         .map(str::to_owned);
-    let mut command = json!({"op":"tts","provider":provider,"text":line.text,"autoplay":false});
+    let mut command = json!({"op":"tts","provider":provider,
+        "text":line.speech_text(provider, model),"autoplay":false});
     if let Some(voice) = &line.voice {
         command["voice"] = json!(voice);
     }
-    if let Some(model) = &line.tts_model {
-        command["model"] = json!(model);
-    }
+    command["model"] = json!(model);
     session.send(command)?;
     let deadline = Instant::now() + Duration::from_secs(180);
     while Instant::now() < deadline {
@@ -499,6 +516,7 @@ mod tests {
                 voice: None,
                 tts_model: None,
                 emotion: None,
+                expression_intensity: 1.0,
                 gesture: None,
                 pause: 0.18,
                 motion: vec![],

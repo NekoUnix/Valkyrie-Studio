@@ -142,8 +142,8 @@ impl Engine {
     }
     pub fn emotion(&mut self, name: &str, intensity: f32, until: f64) -> Result<()> {
         ensure!(
-            (0.0..=1.0).contains(&intensity) && intensity.is_finite(),
-            "Invalid emotion intensity"
+            (0.0..=5.0).contains(&intensity) && intensity.is_finite(),
+            "Expression intensity must be 0–5"
         );
         let values: &[(&str, f32)] = match name {
             "joy" => &[
@@ -151,19 +151,36 @@ impl Engine {
                 ("mouthSmileRight", 0.85),
                 ("cheekSquintLeft", 0.4),
                 ("cheekSquintRight", 0.4),
+                ("pitch", -2.0),
             ],
+            "excited" => &[
+                ("mouthSmileLeft", 1.0),
+                ("mouthSmileRight", 1.0),
+                ("eyeWideLeft", 0.55),
+                ("eyeWideRight", 0.55),
+                ("pitch", -4.0),
+            ],
+            "curious" => &[("browOuterUpRight", 0.65), ("yaw", -6.0), ("roll", 5.0)],
             "thinking" => &[("yaw", -10.0), ("roll", 7.0), ("browOuterUpRight", 0.5)],
+            "sad" => &[
+                ("browInnerUp", 0.65),
+                ("mouthFrownLeft", 0.45),
+                ("mouthFrownRight", 0.45),
+                ("pitch", 5.0),
+            ],
             "angry" => &[
                 ("browDownLeft", 0.8),
                 ("browDownRight", 0.8),
                 ("mouthFrownLeft", 0.6),
                 ("mouthFrownRight", 0.6),
+                ("pitch", 3.0),
             ],
             "surprised" => &[
                 ("jawOpen", 0.7),
                 ("eyeWideLeft", 0.8),
                 ("eyeWideRight", 0.8),
                 ("browInnerUp", 0.8),
+                ("pitch", -3.0),
             ],
             "neutral" => &[],
             _ => bail!("Unknown emotion"),
@@ -171,7 +188,14 @@ impl Engine {
         self.emotion = Some((
             values
                 .iter()
-                .map(|(k, v)| ((*k).into(), v * intensity))
+                .map(|(k, v)| {
+                    let scale = if matches!(*k, "yaw" | "pitch" | "roll") {
+                        intensity.min(1.0) * (1.0 + 0.35 * (intensity - 1.0).max(0.0))
+                    } else {
+                        intensity
+                    };
+                    ((*k).into(), v * scale)
+                })
                 .collect(),
             until,
         ));
@@ -507,5 +531,9 @@ mod tests {
         engine.emotion("thinking", 1.0, 1.0).unwrap();
         let sample = engine.sample(&mapper, 0.2, 1.0, None, "primary");
         assert!((sample["ParamAngleX"] - 5.0).abs() < 0.01);
+        engine.emotion("thinking", 5.0, 1.0).unwrap();
+        let stronger = engine.sample(&mapper, 0.3, 1.0, None, "primary");
+        assert!(stronger["ParamAngleX"] < sample["ParamAngleX"] - 10.0);
+        assert!(engine.emotion("thinking", 5.1, 1.0).is_err());
     }
 }

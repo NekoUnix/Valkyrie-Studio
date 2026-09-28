@@ -30,6 +30,8 @@ pub struct Script {
     pub model_path: Option<PathBuf>,
     #[serde(default = "provider_default")]
     pub provider: String,
+    /// Default speech model for all lines; a line can override it.
+    pub tts_model: Option<String>,
     #[serde(default = "width_default")]
     pub width: u32,
     #[serde(default = "height_default")]
@@ -76,6 +78,8 @@ pub struct Line {
     pub voice: Option<String>,
     pub tts_model: Option<String>,
     pub emotion: Option<String>,
+    #[serde(default = "expression_default")]
+    pub expression_intensity: f32,
     pub gesture: Option<String>,
     #[serde(default = "pause_default")]
     pub pause: f64,
@@ -83,6 +87,41 @@ pub struct Line {
     pub motion: Vec<Cue>,
     /// An existing local audio file can be supplied instead of spending TTS credits.
     pub audio: Option<PathBuf>,
+}
+fn expression_default() -> f32 {
+    1.0
+}
+
+pub const EMOTIONS: &[&str] = &[
+    "neutral",
+    "joy",
+    "excited",
+    "curious",
+    "thinking",
+    "sad",
+    "angry",
+    "surprised",
+];
+
+pub fn v3_emotion_tag(emotion: &str) -> Option<&'static str> {
+    match emotion {
+        "joy" => Some("[happy]"),
+        "excited" => Some("[excited]"),
+        "curious" | "thinking" => Some("[curious]"),
+        "sad" => Some("[sad]"),
+        "angry" => Some("[angry]"),
+        "surprised" => Some("[surprised]"),
+        _ => None,
+    }
+}
+pub fn default_gesture(emotion: &str) -> Option<&'static str> {
+    match emotion {
+        "joy" | "excited" => Some("nod"),
+        "curious" | "thinking" | "sad" => Some("tilt"),
+        "angry" => Some("shake"),
+        "surprised" => Some("lean"),
+        _ => None,
+    }
 }
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct Cue {
@@ -137,6 +176,9 @@ impl Script {
             self.motion_energy.is_finite() && (0.0..=2.0).contains(&self.motion_energy),
             "motion_energy must be 0–2"
         );
+        if let Some(model) = &self.tts_model {
+            ensure!(!model.trim().is_empty(), "tts_model cannot be empty");
+        }
         ensure!(
             (1..=1000).contains(&self.lines.len()),
             "Script requires 1–1000 lines"
@@ -159,14 +201,17 @@ impl Script {
             );
             if let Some(name) = &line.emotion {
                 ensure!(
-                    matches!(
-                        name.as_str(),
-                        "joy" | "thinking" | "angry" | "surprised" | "neutral"
-                    ),
+                    EMOTIONS.contains(&name.as_str()),
                     "Line {} has unknown emotion",
                     index + 1
                 );
             }
+            ensure!(
+                line.expression_intensity.is_finite()
+                    && (0.0..=5.0).contains(&line.expression_intensity),
+                "Line {} expression_intensity must be 0–5",
+                index + 1
+            );
             if let Some(name) = &line.gesture {
                 ensure!(
                     matches!(name.as_str(), "nod" | "shake" | "tilt" | "lean"),
@@ -190,6 +235,23 @@ impl Script {
     }
 }
 impl Line {
+    pub fn speech_text(&self, provider: &str, model: &str) -> String {
+        if provider == "elevenlabs" && model == "eleven_v3" && self.expression_intensity > 0.0 {
+            if let Some(tag) = self.emotion.as_deref().and_then(v3_emotion_tag) {
+                return format!("{tag} {}", self.text);
+            }
+        }
+        self.text.clone()
+    }
+
+    pub fn effective_gesture(&self) -> Option<&str> {
+        self.gesture.as_deref().or_else(|| {
+            (self.expression_intensity > 0.0)
+                .then(|| self.emotion.as_deref().and_then(default_gesture))
+                .flatten()
+        })
+    }
+
     pub fn head_at(&self, fraction: f64) -> [f32; 3] {
         if self.motion.is_empty() {
             let t = fraction.clamp(0.0, 1.0) as f32;
@@ -285,5 +347,31 @@ mod tests {
         );
         assert!(Script::parse(r#"{"motion_energy":2.1,"lines":[{"text":"Hi"}]}"#).is_err());
         assert!(Script::parse(r#"{"lines":[{"text":"Hi","gesture":"spin"}]}"#).is_err());
+    }
+    #[test]
+    fn eleven_v3_tags_and_model_actions_follow_the_same_emotion() {
+        let script = Script::parse(
+            r#"{"tts_model":"eleven_v3","lines":[
+            {"text":"Hello!","emotion":"excited","expression_intensity":5},
+            {"text":"Listen.","emotion":"sad","expression_intensity":0},
+            {"text":"Think.","emotion":"thinking","gesture":"nod"}
+        ]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            script.lines[0].speech_text("elevenlabs", "eleven_v3"),
+            "[excited] Hello!"
+        );
+        assert_eq!(script.lines[0].effective_gesture(), Some("nod"));
+        assert_eq!(
+            script.lines[1].speech_text("elevenlabs", "eleven_v3"),
+            "Listen."
+        );
+        assert_eq!(script.lines[2].effective_gesture(), Some("nod"));
+        assert_eq!(
+            script.lines[0].speech_text("openai", "gpt-4o-mini-tts"),
+            "Hello!"
+        );
+        assert!(Script::parse(r#"{"lines":[{"text":"Hi","expression_intensity":5.1}]}"#).is_err());
     }
 }
