@@ -765,6 +765,32 @@ impl Studio {
         if let Some(active) = &self.network {
             ui.label(egui::RichText::new(format!("Agent API  {}", active.api_address)).color(CYAN));
         }
+        if self.engine.mode == "agent" {
+            ui.add_space(8.0);
+            Self::section(
+                ui,
+                "Agent puppeteering",
+                "Movement continues between agent commands.",
+            );
+            ui.add(
+                egui::Slider::new(&mut self.engine.agent_motion_energy, 0.0..=2.0)
+                    .text("Motion energy"),
+            );
+            ui.small("Adds gentle head and body sway, gaze, and blinking. Agent tracking and speech still drive the pose and mouth.");
+            ui.horizontal_wrapped(|ui| {
+                for gesture in ["nod", "shake", "tilt", "lean"] {
+                    if ui.button(gesture).clicked() {
+                        let _ = self.engine.gesture(
+                            gesture,
+                            1.0,
+                            0.8,
+                            self.started.elapsed().as_secs_f64(),
+                        );
+                    }
+                }
+            });
+            ui.small("Agents can send the same gestures with the local API.");
+        }
         ui.separator();
         Self::section(
             ui,

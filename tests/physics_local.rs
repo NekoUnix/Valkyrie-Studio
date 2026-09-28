@@ -1,10 +1,46 @@
 //! Opt-in diagnostic for a locally owned model. No model assets are included.
 use std::{env, path::Path};
 use valkyrie_studio::{
+    engine::{Engine, EngineConfig},
     model::ModelAssets,
     physics::{GroupSettings, Physics, PhysicsSettings},
     purism::CubismModel,
+    tracking::{Mapper, Parameter},
 };
+
+#[test]
+#[ignore = "set VALKYRIE_TEST_MODEL to a local .model3.json"]
+fn agent_motion_reaches_local_model_parameters() {
+    let path = env::var("VALKYRIE_TEST_MODEL").expect("set VALKYRIE_TEST_MODEL");
+    let assets = ModelAssets::open(Path::new(&path)).unwrap();
+    let model = CubismModel::load(Path::new(""), &assets.moc, assets.textures.len()).unwrap();
+    let mapper = Mapper::new(model.parameters().iter().map(|parameter| Parameter {
+        id: parameter.id.clone(),
+        min: parameter.min,
+        max: parameter.max,
+        default: parameter.default,
+    }));
+    let mut engine = Engine::new(EngineConfig::default());
+    let first = engine.sample(&mapper, 1.0, 1.0, None, "local");
+    let second = engine.sample(&mapper, 2.0, 1.0, None, "local");
+    let channels = [
+        "ParamAngleX",
+        "ParamAngleY",
+        "ParamAngleZ",
+        "ParamBodyAngleX",
+        "ParamEyeBallX",
+    ];
+    let changed: Vec<_> = channels
+        .into_iter()
+        .filter(|id| mapper.schema.contains_key(*id))
+        .filter(|id| (first[*id] - second[*id]).abs() > 0.05)
+        .collect();
+    assert!(
+        changed.len() >= 2,
+        "Agent motion did not reach two model channels: {changed:?}"
+    );
+    println!("Agent motion reached {changed:?}");
+}
 
 #[test]
 #[ignore = "set VALKYRIE_TEST_MODEL to a local .model3.json"]

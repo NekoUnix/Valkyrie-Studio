@@ -73,6 +73,8 @@ fn main() -> Result<()> {
         status["agent"]["ready"] == true,
         "Load a model in Valkyrie Studio before rendering"
     );
+    let previous_energy = status["agent"]["motion_energy"].as_f64().unwrap_or(1.0);
+    session.send(json!({"op":"puppet","energy":script.motion_energy}))?;
     session.send(json!({"op":"canvas","width":script.width,"height":script.height}))?;
     session
         .send(json!({"op":"view","zoom":script.view.zoom,"x":script.view.x,"y":script.view.y}))?;
@@ -151,6 +153,10 @@ fn main() -> Result<()> {
                         session
                             .send(json!({"op":"emotion","name":emotion,"duration":length+pause}))?;
                     }
+                    if let Some(gesture) = &line.gesture {
+                        session.send(json!({"op":"gesture","name":gesture,
+                            "duration":length.min(1.0).max(0.35)}))?;
+                    }
                     last_line = Some(line_index);
                 }
                 let fraction = ((now - start) / length).clamp(0.0, 1.0);
@@ -174,6 +180,7 @@ fn main() -> Result<()> {
         wait_for_export(&mut session, &chapter, Duration::from_secs(600))?;
         chapter_paths.push(chapter);
     }
+    session.send(json!({"op":"puppet","energy":previous_energy}))?;
     if chapter_paths.len() == 1 {
         fs::rename(&chapter_paths[0], &output)?;
     } else {
@@ -492,6 +499,7 @@ mod tests {
                 voice: None,
                 tts_model: None,
                 emotion: None,
+                gesture: None,
                 pause: 0.18,
                 motion: vec![],
                 audio: None,

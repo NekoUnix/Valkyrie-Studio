@@ -3,12 +3,14 @@
   "width": 1080,
   "height": 1920,
   "fps": 30,
+  "motion_energy": 1.5,
   "view": { "zoom": 3.3, "x": 0.0, "y": -1.6 },
   "chapter_seconds": 180,
   "lines": [
     {
       "text": "Hello, I'm Vaelari. Welcome to Valkyrie Studio.",
       "emotion": "joy",
+      "gesture": "nod",
       "pause": 0.18,
       "motion": [
         { "at": 0.0, "yaw": -8, "pitch": 0, "roll": -2 },
@@ -19,6 +21,7 @@
     {
       "text": "An AI agent can write my lines and direct my head movements while the studio keeps my lips matched to the voice.",
       "emotion": "thinking",
+      "gesture": "tilt",
       "pause": 0.18
     },
     {
