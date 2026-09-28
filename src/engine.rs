@@ -27,6 +27,38 @@ pub struct Engine {
     direct: BTreeMap<String, (f32, f64)>,
     emotion: Option<(Values, f64)>,
     filtered: BTreeMap<String, Values>,
+    pub agent_motion_energy: f32,
+    gesture: Option<AgentGesture>,
+}
+
+#[derive(Clone, Copy)]
+struct AgentGesture {
+    kind: GestureKind,
+    start: f64,
+    duration: f64,
+    intensity: f32,
+}
+
+#[derive(Clone, Copy)]
+enum GestureKind {
+    Nod,
+    Shake,
+    Tilt,
+    Lean,
+}
+
+impl AgentGesture {
+    fn offsets(self, time: f64) -> [f32; 5] {
+        let progress = ((time - self.start) / self.duration).clamp(0.0, 1.0) as f32;
+        let envelope = (progress * std::f32::consts::PI).sin().max(0.0) * self.intensity;
+        let beat = (progress * std::f32::consts::TAU).sin() * envelope;
+        match self.kind {
+            GestureKind::Nod => [0.0, beat * 14.0, 0.0, 0.0, 0.0],
+            GestureKind::Shake => [beat * 16.0, 0.0, 0.0, 0.0, 0.0],
+            GestureKind::Tilt => [0.0, 0.0, envelope * 11.0, 0.0, envelope * 3.0],
+            GestureKind::Lean => [0.0, 0.0, envelope * 2.0, envelope * 8.0, envelope * 7.0],
+        }
+    }
 }
 
 impl Engine {
@@ -39,6 +71,8 @@ impl Engine {
             direct: BTreeMap::new(),
             emotion: None,
             filtered: BTreeMap::new(),
+            agent_motion_energy: 1.0,
+            gesture: None,
         }
     }
     pub fn set_mode(&mut self, mode: &str) -> Result<()> {
@@ -48,6 +82,45 @@ impl Engine {
         self.mode = mode.into();
         self.calibration.reset();
         self.filtered.clear();
+        if mode != "agent" {
+            self.gesture = None;
+        }
+        Ok(())
+    }
+    pub fn set_agent_motion_energy(&mut self, energy: f32) -> Result<()> {
+        ensure!(
+            energy.is_finite() && (0.0..=2.0).contains(&energy),
+            "Agent motion energy must be 0–2"
+        );
+        self.agent_motion_energy = energy;
+        Ok(())
+    }
+    pub fn gesture(&mut self, name: &str, intensity: f32, duration: f64, now: f64) -> Result<()> {
+        ensure!(
+            self.mode == "agent",
+            "Select agent mode before sending a gesture"
+        );
+        let kind = match name {
+            "nod" => GestureKind::Nod,
+            "shake" => GestureKind::Shake,
+            "tilt" => GestureKind::Tilt,
+            "lean" => GestureKind::Lean,
+            _ => bail!("Gesture must be nod, shake, tilt or lean"),
+        };
+        ensure!(
+            intensity.is_finite() && (0.0..=2.0).contains(&intensity),
+            "Gesture intensity must be 0–2"
+        );
+        ensure!(
+            duration.is_finite() && (0.2..=5.0).contains(&duration),
+            "Gesture duration must be 0.2–5 seconds"
+        );
+        self.gesture = Some(AgentGesture {
+            kind,
+            start: now,
+            duration,
+            intensity,
+        });
         Ok(())
     }
     pub fn ingest(&mut self, source: &str, values: &Value, time: f64) -> Result<()> {
@@ -136,18 +209,117 @@ impl Engine {
             .unwrap_or_default();
         if let Some((emotion, until)) = &self.emotion {
             if time < *until {
-                values.extend(emotion.clone());
+                for (id, value) in emotion {
+                    if matches!(id.as_str(), "yaw" | "pitch" | "roll") {
+                        *values.entry(id.clone()).or_insert(0.0) += value;
+                    } else {
+                        values.insert(id.clone(), *value);
+                    }
+                }
+            }
+        }
+        let agent_motion = self.mode == "agent" && self.agent_motion_energy > 0.0;
+        let has_eye_tracking = [
+            "eyeLookOutLeft",
+            "eyeLookInLeft",
+            "eyeLookOutRight",
+            "eyeLookInRight",
+            "eyeLookUpLeft",
+            "eyeLookUpRight",
+            "eyeLookDownLeft",
+            "eyeLookDownRight",
+        ]
+        .iter()
+        .any(|id| values.contains_key(*id));
+        if agent_motion {
+            let energy = self.agent_motion_energy;
+            let ambient = [
+                (time * 0.91).sin() * 4.0 + (time * 0.37 + 1.1).sin() * 2.0,
+                (time * 0.67 + 0.7).sin() * 2.5 + (time * 0.31).sin(),
+                (time * 0.72 + 1.3).sin() * 2.2,
+            ];
+            for (id, offset) in ["yaw", "pitch", "roll"].into_iter().zip(ambient) {
+                let amount = if values.contains_key(id) { 0.28 } else { 1.0 };
+                *values.entry(id.into()).or_insert(0.0) += offset as f32 * energy * amount;
+            }
+        }
+        let gesture = self
+            .gesture
+            .filter(|active| time < active.start + active.duration);
+        self.gesture = gesture;
+        let gesture_offsets = if self.mode == "agent" {
+            gesture
+                .map(|active| active.offsets(time))
+                .unwrap_or([0.0; 5])
+        } else {
+            [0.0; 5]
+        };
+        if gesture.is_some() && self.mode == "agent" {
+            for (id, offset) in ["yaw", "pitch", "roll"].into_iter().zip(gesture_offsets) {
+                *values.entry(id.into()).or_insert(0.0) += offset;
             }
         }
         let mut desired = mapper.defaults();
         desired.extend(mapper.map(&values));
+        if self.mode == "agent" {
+            for (id, offset) in [
+                ("ParamBodyAngleX", gesture_offsets[3]),
+                ("ParamBodyAngleZ", gesture_offsets[4]),
+            ] {
+                if mapper.schema.contains_key(id) {
+                    *desired.entry(id.into()).or_insert(0.0) += offset;
+                }
+            }
+        }
+        if agent_motion {
+            let energy = self.agent_motion_energy;
+            for (id, offset) in [
+                ("ParamBodyAngleX", (time * 0.59 + 0.4).sin() * 2.2),
+                ("ParamBodyAngleY", (time * 0.51 + 1.2).sin() * 1.4),
+                ("ParamBodyAngleZ", (time * 0.46 + 2.0).sin() * 1.8),
+            ] {
+                if mapper.schema.contains_key(id) {
+                    *desired.entry(id.into()).or_insert(0.0) += offset as f32 * energy;
+                }
+            }
+            if !has_eye_tracking {
+                for (id, gaze) in [
+                    (
+                        "ParamEyeBallX",
+                        (time * 0.57).sin() * 0.34 + (time * 0.23).sin() * 0.12,
+                    ),
+                    ("ParamEyeBallY", (time * 0.39 + 0.8).sin() * 0.22),
+                ] {
+                    if mapper.schema.contains_key(id) {
+                        desired.insert(id.into(), gaze as f32 * energy.min(1.5));
+                    }
+                }
+            }
+            let phase = time.rem_euclid(4.6);
+            let blink = if phase < 0.17 {
+                ((phase / 0.085) - 1.0).abs() as f32
+            } else {
+                1.0
+            };
+            for (id, input) in [
+                ("ParamEyeLOpen", "eyeBlinkLeft"),
+                ("ParamEyeROpen", "eyeBlinkRight"),
+            ] {
+                if mapper.schema.contains_key(id)
+                    && !values.contains_key(input)
+                    && let Some(open) = desired.get_mut(id)
+                {
+                    *open *= blink;
+                }
+            }
+        }
         if mapper.schema.contains_key("ParamBreath") {
             desired.insert(
                 "ParamBreath".into(),
                 ((time * 1.8).sin() as f32 + 1.0) * 0.5,
             );
         }
-        if values.is_empty() {
+        if values.is_empty() && self.mode != "agent" {
             if mapper.schema.contains_key("ParamAngleZ") {
                 desired.insert("ParamAngleZ".into(), (time * 0.7).sin() as f32 * 1.2);
             }
@@ -268,5 +440,72 @@ mod tests {
         let due = timeline.due(1.0);
         assert_eq!(due[0]["op"], "first");
         assert_eq!(due[1]["op"], "second");
+    }
+    #[test]
+    fn agent_blinks_while_head_tracking_is_active() {
+        let mapper = Mapper::new([
+            Parameter {
+                id: "ParamAngleX".into(),
+                min: -30.0,
+                max: 30.0,
+                default: 0.0,
+            },
+            Parameter {
+                id: "ParamEyeLOpen".into(),
+                min: 0.0,
+                max: 1.0,
+                default: 1.0,
+            },
+            Parameter {
+                id: "ParamEyeROpen".into(),
+                min: 0.0,
+                max: 1.0,
+                default: 1.0,
+            },
+        ]);
+        let mut engine = Engine::new(EngineConfig::default());
+        engine
+            .ingest("agent", &serde_json::json!({"yaw":10}), 0.0)
+            .unwrap();
+        let closed = engine.sample(&mapper, 0.085, 1.0, None, "primary");
+        let open = engine.sample(&mapper, 0.3, 1.0, None, "primary");
+        assert!(closed["ParamEyeLOpen"] < 0.05);
+        assert!(open["ParamEyeLOpen"] > 0.95);
+        assert!(open["ParamAngleX"] > 0.0);
+    }
+    #[test]
+    fn gesture_adds_motion_then_releases_and_energy_can_be_disabled() {
+        let mapper = Mapper::new([Parameter {
+            id: "ParamAngleY".into(),
+            min: -30.0,
+            max: 30.0,
+            default: 0.0,
+        }]);
+        let mut engine = Engine::new(EngineConfig::default());
+        engine.set_agent_motion_energy(0.0).unwrap();
+        engine.gesture("nod", 1.0, 1.0, 0.0).unwrap();
+        let nod = engine.sample(&mapper, 0.25, 1.0, None, "primary");
+        let settled = engine.sample(&mapper, 1.1, 1.0, None, "primary");
+        assert!(nod["ParamAngleY"] > 8.0);
+        assert!(settled["ParamAngleY"].abs() < 0.1);
+        assert!(engine.set_agent_motion_energy(2.1).is_err());
+        assert!(engine.gesture("unknown", 1.0, 1.0, 0.0).is_err());
+    }
+    #[test]
+    fn thinking_emotion_layers_on_agent_head_direction() {
+        let mapper = Mapper::new([Parameter {
+            id: "ParamAngleX".into(),
+            min: -30.0,
+            max: 30.0,
+            default: 0.0,
+        }]);
+        let mut engine = Engine::new(EngineConfig::default());
+        engine.set_agent_motion_energy(0.0).unwrap();
+        engine
+            .ingest("agent", &serde_json::json!({"yaw":15}), 0.0)
+            .unwrap();
+        engine.emotion("thinking", 1.0, 1.0).unwrap();
+        let sample = engine.sample(&mapper, 0.2, 1.0, None, "primary");
+        assert!((sample["ParamAngleX"] - 5.0).abs() < 0.01);
     }
 }

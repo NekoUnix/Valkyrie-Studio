@@ -19,6 +19,8 @@ The API has a bounded command queue and packet length; high-rate tracking is coa
 | `tracking` | `source`, `values` | Send pose/blendshape values |
 | `calibrate` | — | Reset neutral-pose calibration |
 | `emotion` | `name`: joy/thinking/angry/surprised/neutral, `intensity`, `duration` | Temporary expression |
+| `puppet` | optional `energy` 0–2 | Read or set automatic agent movement (default 1; 0 disables it) |
+| `gesture` | `name`: nod/shake/tilt/lean, optional `intensity` 0–2 and `duration` 0.2–5 seconds | Add a short gesture in agent mode without replacing tracking or speech |
 | `parameters` / `parameters_clear` | Model parameter `values`, `duration` | Set or release direct parameters |
 | `view` | `zoom` 0.1–30, `x`/`y` −12–12 | Frame the model |
 | `canvas` | even `width`/`height`, 16–8192 | Reallocate output canvas before recording |
@@ -37,3 +39,5 @@ The API has a bounded command queue and packet length; high-rate tracking is coa
 `status.recording` includes `frames`, `captured`, `dropped`, `duplicates`, `output`, and `error`. UDP tracking can listen on editable addresses and ports in the UI; the agent TCP API remains loopback-only. Unsupported legacy operations return an explicit error. Never put session tokens or API keys in a script that will be committed.
 
 `physics` returns the model's group IDs, names, inputs, outputs, particle counts, imported multipliers and current settings. Its `settings` field is a complete `PhysicsSettings` object, so read it first and modify the fields you need before sending it back. `motion_style` is `Bouncy`, `Natural`, or `Authored`; overall settings are `enabled`, `strength` (0–2), `inertia` (0–2), `response` (0.25–2), `gravity` (0–2), `wind` (−1–1), and `groups` keyed by authored group ID. Group objects use the same fields. Edits save per model. `{"op":"physics","settle":true}` resets current momentum.
+
+Agent puppeteering runs only while `mode` is `agent`. It adds low-frequency head and body movement, gaze, and automatic blinks even when head tracking is arriving; explicit eye tracking is respected. `puppet.energy` scales those automatic motions, while `gesture` adds a short, eased motion on top. Model parameters are clamped to the loaded schema. Audio-driven mouth values and direct `parameters` overrides retain priority. `status.agent.motion_energy` reports the current setting. For a visible test, send `{"op":"puppet","energy":1.5}` followed by `{"op":"gesture","name":"nod","duration":0.8}`. This is Valkyrie's own parameter animation; no VTube Studio process or Cubism SDK is involved.

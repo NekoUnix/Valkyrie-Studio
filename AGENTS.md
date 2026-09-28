@@ -4,4 +4,6 @@ When asked to control the on-screen model, read `docs/CONNECT_AGENT.md` and `doc
 
 For smooth motion, reuse one authenticated JSON-lines TCP socket and send tracking around 20–30 Hz. The CLI reads the random token from the per-user data folder; do not reveal the token or provider keys. `schema` returns model-specific parameter IDs. Tell the user when a demo is scripted rather than a live language-model response.
 
+For a more animated agent performance, send `{"op":"puppet","energy":1.5}` after connecting, then layer brief `nod`, `shake`, `tilt`, or `lean` gestures where the dialogue calls for them. Keep sending head tracking while a gesture plays; automatic body sway, gaze, and blinking fill the gaps. Leave mouth parameters to speech playback. The **Inputs** tab previews these controls.
+
 For a narrated video, read `docs/AGENT_PERFORMANCE.md`, edit `examples/vaelari_performance.json`, and run `valkyrie-perform --script PATH --output NEW_VIDEO.webm`. It measures voice lines first and aligns head cues and lip-sync across chapters. Keep model files, still images of the model, and credentials out of Git. Only the existing cleared walkthrough video may be published.

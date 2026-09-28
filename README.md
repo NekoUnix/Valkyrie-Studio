@@ -21,9 +21,13 @@ Keep Studio running with a model loaded. In the extracted package, run `valkyrie
 
 ```sh
 valkyrie-agent '{"op":"emotion","name":"joy","duration":3}'
+valkyrie-agent '{"op":"puppet","energy":1.5}'
+valkyrie-agent '{"op":"gesture","name":"nod","duration":0.8}'
 ```
 
-For a voiced performance with head movement, copy and edit [the JSON example](examples/vaelari_performance.json), then run `valkyrie-perform --script performance.json --output take.webm`. The runner prepares each voice line, measures the audio, aligns mouth movement and 20 Hz head cues, records bounded chapters, and joins them. The default pause between lines is 0.18 seconds; adjust each line's `pause` if needed. See [agent connection](docs/CONNECT_AGENT.md), [performance scripts](docs/AGENT_PERFORMANCE.md), and the [API](docs/API.md).
+In agent mode, the model now keeps moving between commands with gentle head and body sway, eye movement, and blinking. The **Inputs** tab has a **Motion energy** slider and gesture preview buttons; `puppet` accepts 0–2 (1 is normal, 0 disables automatic movement). An agent can still send precise tracking at 20–30 Hz, and `gesture` adds a short nod, shake, tilt, or lean without replacing that tracking. Speech continues to drive the mouth.
+
+For a voiced performance with stronger head movement, copy and edit [the JSON example](examples/vaelari_performance.json), then run `valkyrie-perform --script performance.json --output take.webm`. The runner prepares each voice line, measures the audio, aligns mouth movement and 20 Hz head cues, records bounded chapters, and joins them. Set `motion_energy` and optional line `gesture` values to direct its movement. The default pause between lines is 0.18 seconds; adjust each line's `pause` if needed. See [agent connection](docs/CONNECT_AGENT.md), [performance scripts](docs/AGENT_PERFORMANCE.md), and the [API](docs/API.md).
 
 ## Current alpha scope
 

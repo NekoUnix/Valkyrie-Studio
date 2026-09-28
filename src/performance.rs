@@ -21,6 +21,9 @@ fn chapter_default() -> f64 {
 fn pause_default() -> f64 {
     0.18
 }
+fn motion_energy_default() -> f32 {
+    1.35
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Script {
@@ -41,6 +44,8 @@ pub struct Script {
     pub tail: f64,
     #[serde(default)]
     pub view: View,
+    #[serde(default = "motion_energy_default")]
+    pub motion_energy: f32,
     pub lines: Vec<Line>,
 }
 #[derive(Debug, Clone, Deserialize)]
@@ -71,6 +76,7 @@ pub struct Line {
     pub voice: Option<String>,
     pub tts_model: Option<String>,
     pub emotion: Option<String>,
+    pub gesture: Option<String>,
     #[serde(default = "pause_default")]
     pub pause: f64,
     #[serde(default)]
@@ -128,6 +134,10 @@ impl Script {
             "Invalid view framing"
         );
         ensure!(
+            self.motion_energy.is_finite() && (0.0..=2.0).contains(&self.motion_energy),
+            "motion_energy must be 0–2"
+        );
+        ensure!(
             (1..=1000).contains(&self.lines.len()),
             "Script requires 1–1000 lines"
         );
@@ -157,6 +167,13 @@ impl Script {
                     index + 1
                 );
             }
+            if let Some(name) = &line.gesture {
+                ensure!(
+                    matches!(name.as_str(), "nod" | "shake" | "tilt" | "lean"),
+                    "Line {} has unknown gesture",
+                    index + 1
+                );
+            }
             for cue in &line.motion {
                 ensure!(
                     cue.at.is_finite()
@@ -176,10 +193,15 @@ impl Line {
     pub fn head_at(&self, fraction: f64) -> [f32; 3] {
         if self.motion.is_empty() {
             let t = fraction.clamp(0.0, 1.0) as f32;
+            let seed = self.text.bytes().fold(0u32, |hash, byte| {
+                hash.wrapping_mul(16777619).wrapping_add(byte as u32)
+            });
+            let phase = (seed % 1000) as f32 / 1000.0 * std::f32::consts::TAU;
+            let envelope = (t * std::f32::consts::PI).sin();
             return [
-                (t * std::f32::consts::TAU).sin() * 3.0,
-                (t * std::f32::consts::PI).sin() * 1.5,
-                (t * std::f32::consts::TAU).sin() * 0.9,
+                envelope * (t * std::f32::consts::TAU + phase).sin() * 8.0,
+                envelope * (t * std::f32::consts::PI * 1.4 + phase * 0.5).sin() * 4.0,
+                envelope * (t * std::f32::consts::TAU * 0.7 + phase).sin() * 2.8,
             ];
         }
         let mut cues = self.motion.clone();
@@ -239,5 +261,29 @@ mod tests {
         .unwrap();
         assert_eq!(script.lines[0].head_at(0.5)[0], 0.0);
         assert!(Script::parse(r#"{"lines":[{"text":"Hi","pause":-1}]}"#).is_err());
+    }
+    #[test]
+    fn default_head_motion_is_expressive_and_script_controls_are_validated() {
+        let script =
+            Script::parse(r#"{"lines":[{"text":"Welcome, everyone!","gesture":"nod"}]}"#).unwrap();
+        assert_eq!(script.motion_energy, 1.35);
+        let peak = (1..20)
+            .map(|step| script.lines[0].head_at(step as f64 / 20.0)[0].abs())
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 4.0);
+        assert!(
+            script.lines[0]
+                .head_at(0.0)
+                .iter()
+                .all(|angle| angle.abs() < 0.001)
+        );
+        assert!(
+            script.lines[0]
+                .head_at(1.0)
+                .iter()
+                .all(|angle| angle.abs() < 0.001)
+        );
+        assert!(Script::parse(r#"{"motion_energy":2.1,"lines":[{"text":"Hi"}]}"#).is_err());
+        assert!(Script::parse(r#"{"lines":[{"text":"Hi","gesture":"spin"}]}"#).is_err());
     }
 }

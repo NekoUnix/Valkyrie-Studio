@@ -20,6 +20,8 @@ The overall sliders set strength, inertia, response speed, gravity, and wind. Us
 
 Choose **agent**, **phone**, **webcam**, or **idle** in **Inputs**. The active mode receives tracking; the first samples calibrate a neutral pose. Use `valkyrie-agent --connect` to switch to agent mode, verify READY, and send JSON control commands. [Agent connection](CONNECT_AGENT.md) explains how to connect a language-model tool or another local program.
 
+In agent mode, **Motion energy** sets how much head sway, body movement, eye motion, and blinking continue between commands. Start at 1, try 1.5 for a more animated presentation, or set 0 to turn automatic motion off. The **nod**, **shake**, **tilt**, and **lean** buttons preview short gestures; an agent can send the same actions through the local API while continuing to drive head tracking and speech. The model's available parameter ranges limit the result, so some rigs may move less than others.
+
 For a phone, run an iFacialMocap-compatible sender that sends ARKit/iFacialMocap UDP data to this computer. The Rust app listens on loopback ports 15483, 8001, and 49983 by default. Open **Inputs**, set the UDP listen address to `0.0.0.0` and enter the desired ports, then choose **Apply listening addresses**. In the phone app, set its destination to this PC's LAN IP and one of those ports (often 49983 for iFacialMocap). Select **phone** mode and verify movement in the preview. Use a trusted private network and allow the selected UDP port through the OS firewall if needed; the authenticated agent TCP port stays on loopback.
 
 For a webcam, install the optional Python/OpenCV/MediaPipe helper described in [Build](BUILD.md), then run it with your camera index or stream URL and a local `face_landmarker.task`. It sends only landmark scores to `127.0.0.1:15483`; select **webcam** mode. The Rust UI does not yet start or configure this helper. `valkyrie-agent '{"op":"calibrate"}'` repeats neutral calibration.
@@ -34,7 +36,7 @@ For ElevenLabs, choose **Refresh my voices** and select one of the returned acco
 
 Open **Capture** and set an output filename that does not exist. Choose H.264 or H.265 for `.mp4`, VP9 for alpha `.webm`, or ProRes for alpha `.mov`. Install an FFmpeg build with both `utvideo` and the format's encoder; set `FFMPEG` if it is not on PATH. The recorder keeps the preview interactive, uses bounded GPU readback, and saves a lossless intermediate before final compression. At 1080×1920, that intermediate can be hundreds of MB even for a short clip. Leave room and wait for the **saved** state after stopping. The UI shows total, repeated, and dropped frames.
 
-For long reads, use [performance scripts](AGENT_PERFORMANCE.md). The runner generates voice first, trims leading/trailing silence, defaults to a 0.18-second line gap, synchronizes head cues with each measured line, and records chapters. A video demonstration of the workflow is linked above; it predates the Rust renderer.
+For long reads, use [performance scripts](AGENT_PERFORMANCE.md). The runner generates voice first, trims leading/trailing silence, defaults to a 0.18-second line gap, synchronizes head cues with each measured line, and records chapters. Use `motion_energy` and optional line `gesture` fields for stronger puppeteering. A video demonstration of the workflow is linked above; it predates the Rust renderer.
 
 ## Current alpha limits
 

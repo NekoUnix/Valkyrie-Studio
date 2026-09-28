@@ -463,7 +463,8 @@ impl Studio {
             "model": self.model_path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().to_string()),
             "model_path": self.model_path.as_ref().map(|p| p.display().to_string()),
             "mode": self.engine.mode,
-            "agent": {"ready": self.model.is_some() && self.engine.mode == "agent", "commands": self.command_count},
+            "agent": {"ready": self.model.is_some() && self.engine.mode == "agent", "commands": self.command_count,
+                "motion_energy": self.engine.agent_motion_energy},
             "view": {"zoom": self.zoom, "x": self.pan.x, "y": self.pan.y},
             "canvas": {"width": self.canvas[0], "height": self.canvas[1]},
             "guides": {"preset": self.guide, "enabled": self.show_guides,
@@ -583,6 +584,24 @@ impl Studio {
                 let intensity = request["intensity"].as_f64().unwrap_or(1.0) as f32;
                 let duration = duration(request, 3.0)?;
                 self.engine.emotion(name, intensity, now + duration)?;
+                Ok(json!(true))
+            }
+            "puppet" => {
+                if !request["energy"].is_null() {
+                    let energy = request["energy"]
+                        .as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("Motion energy must be numeric"))?;
+                    self.engine.set_agent_motion_energy(energy as f32)?;
+                }
+                Ok(json!({"energy": self.engine.agent_motion_energy}))
+            }
+            "gesture" => {
+                let name = request["name"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Missing gesture name"))?;
+                let intensity = request["intensity"].as_f64().unwrap_or(1.0) as f32;
+                let duration = duration(request, 0.8)?;
+                self.engine.gesture(name, intensity, duration, now)?;
                 Ok(json!(true))
             }
             "parameters" => {
